@@ -134,6 +134,12 @@ def autosave_commit(self, deps: ReviewPageDeps) -> bool:
         return False
     state = self.parent._foreground_batch_state(self.parent.current_index)
     if state == "processing":
+        # Processing owns this page: do not publish review text or let a
+        # separate PPP save acknowledge its uncommitted human input.
+        self._r3_autosave_unconfirmed = True
+        self.parent.status_var.set(
+            "后台正在处理当前页；校对文字未保存或未确认，输入仍保留，请处理结束后重试。"
+        )
         return True
     # A partial async repaint, an obsolete page or reloaded Entry objects
     # cannot acknowledge a ReviewWindow autosave. A True refusal blocks the
