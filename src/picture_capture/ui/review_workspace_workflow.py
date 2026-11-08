@@ -733,7 +733,7 @@ def _request_render_rows(
         if geometry_stale:
             self._request_render_rows(focus_index=self._review_render_focus_index)
             return
-        if not self.parent.current_page or self.parent.current_page.stem != result_stem:
+        if self.parent.current_page != page or page.stem != result_stem:
             return
         current_entries = self.parent._ordered_entries_reading_order()
         current_signature = tuple(
