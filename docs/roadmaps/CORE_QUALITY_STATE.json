@@ -4201,5 +4201,26 @@
     "docs_head_status": "PENDING_SEPARATE_EXACT_HEAD_GATES",
     "manual": "NOT_PERFORMED_DEFERRED",
     "next_action": "FIRST verify live #663 HEAD and exact docs-HEAD six matrix CI, Risk tier/gate, OCR three OS, CodeQL Python/Actions. Then new synthetic RED-first R4.2 SECTION/crop-save epoch candidate. No real scans, manual E3, merge, Ready or force."
+  },
+  "r4_2_review_crop_page_path_owner_20261108": {
+    "red_sha": "0c696a944d634d063daeb0a0fc60ea381dd94d39",
+    "red_ci": "https://github.com/chigre/PictureCapture/actions/runs/42457329596",
+    "red_result": "six matrix FAILURE expected; Ubuntu Python3.13 1 failed / 5774 passed / 3 skipped; unchanged-page positive control passed",
+    "source_sha": "8f7fc69dd443ca3abb6a11c6ed73432a264a87f4",
+    "source_ci": "https://github.com/chigre/PictureCapture/actions/runs/42461486965",
+    "source_ci_result": "Windows/macOS/Ubuntu x Python3.10/3.13 6/6 SUCCESS; Risk tier and Risk-tier CI gate SUCCESS",
+    "ocr": "https://github.com/chigre/PictureCapture/actions/runs/42461486848",
+    "ocr_result": "3/3 SUCCESS",
+    "codeql": "https://github.com/chigre/PictureCapture/actions/runs/42461483522",
+    "codeql_result": "Analyze python/actions 2/2 SUCCESS verified exact SHA check-runs",
+    "documentation_architecture": "SKIPPED_NOT_PASS",
+    "files": [
+      "tests/test_r42_review_crop_page_path_owner_20261108.py",
+      "src/picture_capture/ui/review_workspace_workflow.py"
+    ],
+    "audit": "docs/architecture/PC_CQ_R42_REVIEW_CROP_PAGE_PATH_OWNER_20261108.md",
+    "docs_head_status": "PENDING_SEPARATE_EXACT_HEAD_GATES",
+    "manual": "NOT_PERFORMED_DEFERRED",
+    "next_action": "FIRST verify live #663 HEAD and exact new docs-head six matrix CI, Risk tier/gate, OCR 3 OS, CodeQL python/actions. Then independent synthetic RED-first R4.2 SECTION/crop-save epoch; no real scan, manual E3, merge, Ready, force or schema/XY changes."
   }
 }
