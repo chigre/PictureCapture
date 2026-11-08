@@ -4180,5 +4180,26 @@
     "scope": "synthetic E2; no genuine operator/real-scan acceptance",
     "docs_head_status": "PENDING_SEPARATE_EXACT_HEAD_GATES",
     "next_action": "Read LIVE main/#663 Open/Draft/Unmerged HEAD and review threads; FIRST verify THIS new documentation checkpoint exact-head Windows/macOS/Ubuntu × Python3.10/3.13 CI six matrices, Risk-tier + Risk-tier CI gate, OCR three OS, and CodeQL Python/Actions. Documentation architecture SKIPPED is NOT PASS. Fix failures from real job logs. Then run a NEW, independent synthetic RED-first R3 ordinary ReviewWindow/main save failure-retry/partial rebind case, or R4.2 SECTION/crop-save epoch case with a genuinely new counterexample. Existing background_job_runtime already suppresses superseded same-key terminal callbacks; do not re-fix that path. Keep #663 sole Draft; no merge, force, schema/XY/consent/private data changes. Manual Windows R3 E3, #483 W1-W11, #503 Undo/Redo, real dictionary scan and PDIC/PPP/SECTION/Profile/OCR save-reopen, R6 real-label and R8 real-scan remain NOT PERFORMED/DEFERRED."
+  },
+  "r4_2_review_crop_project_owner_20261108": {
+    "red_sha": "20da571882ec0efdb50a41907300d859e3352dc8",
+    "red_ci": "https://github.com/chigre/PictureCapture/actions/runs/42436390625",
+    "red_result": "six matrix FAILURE as intended; Ubuntu3.13 1 failed / 5772 passed / 3 skipped; unchanged-project positive control passed",
+    "source_sha": "ecdfe051aa6cb665bef993e8c5cfd921d450361b",
+    "source_ci": "https://github.com/chigre/PictureCapture/actions/runs/42441136416",
+    "source_ci_result": "six OS/Python jobs SUCCESS; Risk tier and Risk-tier CI gate SUCCESS",
+    "ocr": "https://github.com/chigre/PictureCapture/actions/runs/42441136121",
+    "ocr_result": "Windows/macOS/Ubuntu 3/3 SUCCESS",
+    "codeql": "https://github.com/chigre/PictureCapture/actions/runs/42441134024",
+    "codeql_result": "Analyze python/actions 2/2 SUCCESS (confirmed from exact-commit check-runs)",
+    "documentation_architecture": "SKIPPED_NOT_PASS",
+    "files": [
+      "tests/test_r42_review_crop_project_owner_20261108.py",
+      "src/picture_capture/ui/review_workspace_workflow.py"
+    ],
+    "audit": "docs/architecture/PC_CQ_R42_REVIEW_CROP_PROJECT_OWNER_20261108.md",
+    "docs_head_status": "PENDING_SEPARATE_EXACT_HEAD_GATES",
+    "manual": "NOT_PERFORMED_DEFERRED",
+    "next_action": "FIRST verify live #663 HEAD and exact docs-HEAD six matrix CI, Risk tier/gate, OCR three OS, CodeQL Python/Actions. Then new synthetic RED-first R4.2 SECTION/crop-save epoch candidate. No real scans, manual E3, merge, Ready or force."
   }
 }
