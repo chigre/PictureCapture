@@ -43,17 +43,19 @@ def _start(page: Path):
     deps = SimpleNamespace(
         ttk=SimpleNamespace(), tk=SimpleNamespace(TclError=RuntimeError),
         Image=Image, _format_layout_percent=str,
-        _review_crop_context=lambda *a: None,
-        _review_line_box=lambda *a, **kw: None,
+        _review_crop_context=lambda *a: (None, object()),
+        _review_line_box=lambda *a, **kw: (0, 0, 12, 12),
         sync_review_entry_classification=lambda *_: None,
         normalize_page_rgb=lambda opened: opened.convert("RGB"),
         review_auto_fit_zoom=lambda *a: 1.0, replace=replace,
     )
     flow._request_render_rows(review, deps, focus_index=0)
     assert len(callbacks) == 1
+    # Execute the real crop worker against the original red synthetic image.
+    payload = callbacks[0][0]()
+    assert payload[2][0].getpixel((0, 0)) == (255, 0, 0)
     def deliver():
-        callbacks[0][1]((page.stem, ((id(row), row.x, row.y, row.word),),
-                         [object()], 1.0, False))
+        callbacks[0][1](payload)
     return rendered, retried, deliver
 
 
