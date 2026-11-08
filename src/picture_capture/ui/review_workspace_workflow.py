@@ -706,6 +706,10 @@ def _request_render_rows(
                 return
         except tk.TclError:
             return
+        # A worker result belongs to the exact project that dispatched it.
+        # Matching page/Entry geometry is insufficient after project replacement.
+        if self.parent.project is not project:
+            return
         result_stem, result_signature, crops, effective_zoom, requested_auto_zoom = payload
         if requested_auto_zoom != bool(self.review_zoom_auto):
             self._request_render_rows(focus_index=self._review_render_focus_index)
