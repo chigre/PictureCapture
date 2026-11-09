@@ -22,7 +22,15 @@ class Settings:
     review_zoom_percent: int = 100
 
 
-def _start(page: Path):
+def _normalize_and_notify(opened, after_read):
+    # Capture pixels from the already-opened image before the path is replaced.
+    pixels = opened.convert("RGB")
+    if after_read is not None:
+        after_read()
+    return pixels
+
+
+def _start(page: Path, *, after_read=None):
     row = Entry()
     callbacks, rendered, retried = [], [], []
     parent = SimpleNamespace(
@@ -46,7 +54,7 @@ def _start(page: Path):
         _review_crop_context=lambda *a: (None, object()),
         _review_line_box=lambda *a, **kw: (0, 0, 12, 12),
         sync_review_entry_classification=lambda *_: None,
-        normalize_page_rgb=lambda opened: opened.convert("RGB"),
+        normalize_page_rgb=lambda opened: _normalize_and_notify(opened, after_read),
         review_auto_fit_zoom=lambda *a: 1.0, replace=replace,
     )
     flow._request_render_rows(review, deps, focus_index=0)
@@ -86,3 +94,23 @@ def test_same_path_unchanged_pixels_accept_crop(tmp_path):
     deliver()
     assert len(rendered) == 1
     assert not retried
+
+
+def test_source_replaced_while_worker_is_cropping_reject_old_pixels(tmp_path):
+    page = tmp_path / "page.bmp"
+    _write_bmp(page, (255, 0, 0))
+    original = page.read_bytes()
+    stamp = page.stat()
+
+    def replace_during_worker():
+        # Worker has read red pixels; mutate the same path before crop finishes.
+        _write_bmp(page, (0, 0, 255))
+        import os
+        os.utime(page, ns=(stamp.st_atime_ns, stamp.st_mtime_ns))
+
+    rendered, retried, deliver = _start(page, after_read=replace_during_worker)
+    assert page.read_bytes() != original
+    assert page.stat().st_size == stamp.st_size
+    assert page.stat().st_mtime_ns == stamp.st_mtime_ns
+    deliver()
+    assert not rendered, "worker crop from pre-replacement pixels was painted"
