@@ -30,7 +30,7 @@ def _normalize_and_notify(opened, after_read):
     return pixels
 
 
-def _start(page: Path, *, after_read=None):
+def _start(page: Path, *, after_read=None, return_callbacks=False):
     row = Entry()
     callbacks, rendered, retried = [], [], []
     parent = SimpleNamespace(
@@ -64,6 +64,8 @@ def _start(page: Path, *, after_read=None):
     assert payload[2][0].getpixel((0, 0)) == (255, 0, 0)
     def deliver():
         callbacks[0][1](payload)
+    if return_callbacks:
+        return rendered, retried, deliver, callbacks
     return rendered, retried, deliver
 
 
@@ -114,3 +116,20 @@ def test_source_replaced_while_worker_is_cropping_reject_old_pixels(tmp_path):
     assert page.stat().st_mtime_ns == stamp.st_mtime_ns
     deliver()
     assert not rendered, "worker crop from pre-replacement pixels was painted"
+
+
+def test_verification_worker_rechecks_source_after_its_own_read(tmp_path):
+    """A second async content check must not authorize an obsolete crop."""
+    page = tmp_path / "page.bmp"
+    _write_bmp(page, (255, 0, 0))
+    stamp = page.stat()
+    rendered, retried, deliver, callbacks = _start(page, return_callbacks=True)
+    deliver()
+    assert len(callbacks) == 2, "crop callback must schedule nonblocking source verification"
+    assert not rendered, "crop was rendered before asynchronous verification"
+    verification_payload = callbacks[1][0]()
+    _write_bmp(page, (0, 0, 255))
+    import os
+    os.utime(page, ns=(stamp.st_atime_ns, stamp.st_mtime_ns))
+    callbacks[1][1](verification_payload)
+    assert not rendered, "source changed after verification read; stale crop was rendered"
