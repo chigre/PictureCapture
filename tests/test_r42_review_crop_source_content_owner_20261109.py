@@ -92,9 +92,13 @@ def test_same_path_same_size_same_mtime_changed_pixels_reject_old_crop(tmp_path)
 def test_same_path_unchanged_pixels_accept_crop(tmp_path):
     page = tmp_path / "page.bmp"
     _write_bmp(page, (255, 0, 0))
-    rendered, retried, deliver = _start(page)
+    rendered, retried, deliver, callbacks = _start(page, return_callbacks=True)
     deliver()
-    assert len(rendered) == 1
+    assert len(callbacks) == 2, "crop must be verified asynchronously before rendering"
+    assert not rendered, "unverified crop was painted"
+    verification_payload = callbacks[1][0]()
+    callbacks[1][1](verification_payload)
+    assert len(rendered) == 1, "unchanged source must render after verification"
     assert not retried
 
 
