@@ -4103,7 +4103,10 @@ def test_round2_heavy_finalizers_and_review_crops_stay_off_tk():
     review_render_owner = (root / "src/picture_capture/ui/review_workspace_workflow.py").read_text(encoding="utf-8")
     request = review_render_owner.split("def _request_render_rows(", 1)[1].split("\ndef render_rows(", 1)[0]
     render = review_render_owner.split("def render_rows(", 1)[1]
-    assert "with Image.open(page) as opened:" in request
+    crop_worker = request.split("    def worker():", 1)[1].split("    def owner_is_current(", 1)[0]
+    assert "Image.open(snapshot) as opened:" in crop_worker
+    assert "BytesIO(source_bytes)" in crop_worker
+    assert "_read_crop_source_bytes(page)" in crop_worker
     assert "Image.Resampling.LANCZOS" in request
     assert "self.parent._start_ui_worker(" in request
     assert "Image.Resampling.LANCZOS" not in render

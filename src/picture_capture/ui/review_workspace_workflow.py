@@ -7,13 +7,58 @@ No imports from the heavyweight app module or native OCR engines.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import TYPE_CHECKING
+from hashlib import sha256
+from io import BytesIO
+import os
+from pathlib import Path
+from typing import BinaryIO, TYPE_CHECKING
 
 from ..proofreading.simplified_review import source_word_conflicts
 
 if TYPE_CHECKING:
     import tkinter as tk
     from PIL import Image
+
+
+def _crop_source_stamp(stream: BinaryIO) -> tuple[int, ...]:
+    stat = os.fstat(stream.fileno())
+    change_time = stat.st_ctime_ns
+    if os.name == "nt":
+        # Windows st_ctime is creation time. Read the filesystem change time
+        # from the same handle so rewriting bytes and restoring mtime is visible.
+        import ctypes
+        import msvcrt
+        from ctypes import wintypes
+
+        class FileBasicInfo(ctypes.Structure):
+            _fields_ = [
+                ("creation_time", ctypes.c_int64),
+                ("access_time", ctypes.c_int64),
+                ("write_time", ctypes.c_int64),
+                ("change_time", ctypes.c_int64),
+                ("attributes", wintypes.DWORD),
+            ]
+
+        info = FileBasicInfo()
+        query = ctypes.windll.kernel32.GetFileInformationByHandleEx
+        if not query(
+            wintypes.HANDLE(msvcrt.get_osfhandle(stream.fileno())),
+            0,  # FileBasicInfo
+            ctypes.byref(info),
+            ctypes.sizeof(info),
+        ):
+            raise ctypes.WinError()
+        change_time = info.change_time
+    return stat.st_dev, stat.st_ino, stat.st_size, stat.st_mtime_ns, change_time
+
+
+def _read_crop_source_bytes(path: Path) -> bytes:
+    with path.open("rb") as stream:
+        before = _crop_source_stamp(stream)
+        data = stream.read()
+        if _crop_source_stamp(stream) != before:
+            raise OSError("源图已变化，请重新加载页面后重试")
+    return data
 
 
 @dataclass(frozen=True)
@@ -639,7 +684,7 @@ def _request_render_rows(
         focus_index = self.active_index
     self._review_render_focus_index = max(0, int(focus_index))
 
-    page = self.parent.current_page
+    page = current_page
     page_index = int(self.parent.current_index)
     settings = replace(self.parent.settings)
     requested_auto_zoom = bool(self.review_zoom_auto)
@@ -661,11 +706,14 @@ def _request_render_rows(
         (id(source), int(entry.x), int(entry.y), str(entry.word))
         for source, entry in zip(source_entries, ordered_snapshot)
     )
-    page_stem = page.stem
 
     def worker():
-        with Image.open(page) as opened:
+        # Decode exactly the bytes whose digest travels with the crops.
+        source_bytes = _read_crop_source_bytes(page)
+        source_digest = sha256(source_bytes).digest()
+        with BytesIO(source_bytes) as snapshot, Image.open(snapshot) as opened:
             image = normalize_page_rgb(opened)
+        del source_bytes
         review_settings, geometry = _review_crop_context(
             image, settings, viewer_width, page_index,
         )
@@ -698,22 +746,21 @@ def _request_render_rows(
             )
             for crop in raw_crops
         ]
-        return page_stem, signature, crops, effective_zoom, requested_auto_zoom
+        return crops, effective_zoom, source_digest
 
-    def done(payload) -> None:
+    def owner_is_current() -> bool:
         try:
-            if not self.winfo_exists() or self._prefetch_closed:
-                return
+            if not self.winfo_exists() or self._prefetch_closed or getattr(self, "_filter_rows_active", False):
+                return False
         except tk.TclError:
-            return
+            return False
         # A worker result belongs to the exact project that dispatched it.
         # Matching page/Entry geometry is insufficient after project replacement.
-        if self.parent.project is not project:
-            return
-        result_stem, result_signature, crops, effective_zoom, requested_auto_zoom = payload
+        if self.parent.project is not project or self.parent.current_page != page:
+            return False
         if requested_auto_zoom != bool(self.review_zoom_auto):
             self._request_render_rows(focus_index=self._review_render_focus_index)
-            return
+            return False
         # A crop belongs to the exact geometry inputs captured at dispatch.
         # The worker may finish after manual zoom, viewport or settings change;
         # never paint those stale pixels over the current human editors.
@@ -729,20 +776,18 @@ def _request_render_rows(
                 )
             )
         except (tk.TclError, RuntimeError, ValueError, TypeError):
-            return
+            return False
         if geometry_stale:
             self._request_render_rows(focus_index=self._review_render_focus_index)
-            return
-        if self.parent.current_page != page or page.stem != result_stem:
-            return
+            return False
         current_entries = self.parent._ordered_entries_reading_order()
         current_signature = tuple(
             (id(entry), int(entry.x), int(entry.y), str(entry.word))
             for entry in current_entries
         )
-        if current_signature != result_signature:
+        if current_signature != signature:
             self._request_render_rows(focus_index=self._review_render_focus_index)
-            return
+            return False
         # Entry.word is the committed model value, not the human's current Tk
         # buffer. Crops were measured using editor_texts before this worker
         # launched; a newer unsaved input can require a different crop height.
@@ -760,23 +805,55 @@ def _request_render_rows(
             current_editor_texts = None
         if current_editor_texts != editor_texts:
             self._request_render_rows(focus_index=self._review_render_focus_index)
+            return False
+        return True
+
+    def done(payload) -> None:
+        if not owner_is_current():
             return
-        if requested_auto_zoom:
-            self.review_zoom = max(0.01, float(effective_zoom))
-            self.review_zoom_var.set(f"自动 {_format_layout_percent(self.review_zoom * 100.0)}%")
-            self.parent.settings.review_zoom_percent = 0.0
-        target_focus = self._review_render_focus_index
-        self.render_rows(preloaded_crops=crops)
-        if reset_scroll:
-            self._reset_rows_scroll_top()
-        if self.editors:
-            self.focus_index(min(target_focus, len(self.editors) - 1))
+        crops, effective_zoom, source_digest = payload
+
+        def verify_source():
+            digest = sha256()
+            with page.open("rb") as stream:
+                before = _crop_source_stamp(stream)
+                for chunk in iter(lambda: stream.read(1024 * 1024), b""):
+                    digest.update(chunk)
+                after = _crop_source_stamp(stream)
+            if before != after or digest.digest() != source_digest:
+                raise OSError("源图已变化，请重新加载页面后重试")
+            return after
+
+        def verified(source_stamp) -> None:
+            if not owner_is_current():
+                return
+            try:
+                # Reopen the live path to catch replacement after the second
+                # read. The Tk callback queries metadata only.
+                with page.open("rb") as stream:
+                    if _crop_source_stamp(stream) != source_stamp:
+                        raise OSError("源图已变化，请重新加载页面后重试")
+            except OSError as exc:
+                failed(exc, "")
+                return
+            if requested_auto_zoom:
+                self.review_zoom = max(0.01, float(effective_zoom))
+                self.review_zoom_var.set(f"自动 {_format_layout_percent(self.review_zoom * 100.0)}%")
+                self.parent.settings.review_zoom_percent = 0.0
+            target_focus = self._review_render_focus_index
+            self.render_rows(preloaded_crops=crops)
+            if reset_scroll:
+                self._reset_rows_scroll_top()
+            if self.editors:
+                self.focus_index(min(target_focus, len(self.editors) - 1))
+
+        launch(verify_source, verified)
 
     def failed(exc, detail) -> None:
         if detail:
             print(detail)
         try:
-            if not self.winfo_exists() or self._prefetch_closed:
+            if not self.winfo_exists() or self._prefetch_closed or getattr(self, "_filter_rows_active", False):
                 return
         except tk.TclError:
             return
@@ -810,12 +887,15 @@ def _request_render_rows(
     # A failed constructor/start or Tk scheduling attempt has no async
     # callback. Surface this failure without destroying existing editors;
     # the user may explicitly request the crops again after the failure.
-    try:
-        self.parent._start_ui_worker(
-            self._review_render_worker_key, worker, done, failed,
-        )
-    except (OSError, RuntimeError, tk.TclError) as exc:
-        failed(exc, "")
+    def launch(work, on_done) -> None:
+        try:
+            self.parent._start_ui_worker(
+                self._review_render_worker_key, work, on_done, failed,
+            )
+        except (OSError, RuntimeError, tk.TclError) as exc:
+            failed(exc, "")
+
+    launch(worker, done)
 
 
 def render_rows(self, deps: ReviewWorkspaceDeps, preloaded_crops: list[Image.Image] | None = None) -> None:

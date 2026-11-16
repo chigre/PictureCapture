@@ -1,3 +1,12 @@
+## 2026-11-16 — R4.2 ordinary ReviewWindow crop source content
+
+- Live authority before publishing: sole #663 Open/Draft/Unmerged, branch `refactor/562-retire-root-image-utils-20261024`, main `ec20989ea8c026cca5337293e67850b6b6df30f2`, zero review threads.
+- [Exact RED CI](https://github.com/chigre/PictureCapture/actions/runs/43124415532) at `430571adfefe1299cd569177cf01db497c7d4606`: six matrix failures, Ubuntu Python 3.13 **4 failed / 5775 passed / 3 skipped**. Local reproduction **4 failed**.
+- The repair and this checkpoint share a commit. Ubuntu Python 3.13 local **4 targeted passed**, **213 related passed**, **5780 full passed / 3 skipped**. Architecture and change guards and F821 passed locally. [Architecture audit](../architecture/PC_CQ_R42_REVIEW_CROP_SOURCE_CONTENT_OWNER_20261116.md).
+- **Next action.** Resolve the live #663 HEAD and verify its own six Windows/macOS/Ubuntu Python 3.10/3.13 jobs, Risk tier and final gate, three OCR smoke jobs and CodeQL Python/Actions. Read job logs for failures. After the gates pass, reproduce and fix same-path/same-size/same-mtime image replacement at ReviewWindow adjacent-page prefetch consumption with a synthetic BMP. Until all exact-HEAD gates are verified, acceptance is pending. Documentation architecture SKIPPED is a separate outcome.
+- **Queued follow-up.** Locally reproduced stale adjacent-page crops with red-to-blue BMP replacement preserving size and mtime, **1 failed / 1 unchanged control passed**. Check `review_page_lifecycle.py::_take_prefetched_page()`, then R3 failed-save retry and synthetic R5–R7.
+- Human Windows R3 E3, #483 W1–W11, #503 Undo/Redo, real scan and save/reopen, R6 real labels and R8 scans remain **NOT PERFORMED/DEFERRED**.
+
 ## 2026-11-07 — R4.2 ordinary ReviewWindow crop failure-owner and worker-launch retry: RED → source GREEN
 
 - **Verified authority at source HEAD:** sole #663 Open/Draft/Unmerged on `refactor/562-retire-root-image-utils-20261024`; `main@ec20989ea8c026cca5337293e67850b6b6df30f2` unchanged; 0 review threads. App-level same-key generation guard already rejects older worker callbacks; this new packet addresses page/geometry change **before** replacement dispatch and synchronous worker launch errors.

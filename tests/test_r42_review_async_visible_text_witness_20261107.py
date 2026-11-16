@@ -7,8 +7,9 @@ No user images, private words, persisted sidecars, or real OCR.
 from __future__ import annotations
 
 from dataclasses import dataclass, replace
-from pathlib import Path
 from types import SimpleNamespace
+
+from PIL import Image
 
 from picture_capture.ui import review_workspace_workflow as workflow
 
@@ -36,8 +37,9 @@ class Value:
         self.text = value
 
 
-def _case():
-    page = Path("/synthetic/async-review/page-01.png")
+def _case(tmp_path):
+    page = tmp_path / "page-01.png"
+    Image.new("RGB", (12, 12), "red").save(page)
     row = Entry()
     text = Value(row.word)
     observed, rendered, retried = [], [], []
@@ -63,36 +65,50 @@ def _case():
     )
     deps = SimpleNamespace(
         ttk=SimpleNamespace(), tk=SimpleNamespace(TclError=RuntimeError),
-        Image=SimpleNamespace(),
+        Image=Image,
         _format_layout_percent=lambda value: str(value),
-        _review_crop_context=lambda *args: None,
-        _review_line_box=lambda *args, **kwargs: None,
+        _review_crop_context=lambda *args: (None, None),
+        _review_line_box=lambda *args, **kwargs: (0, 0, 12, 12),
         sync_review_entry_classification=lambda _review: None,
-        normalize_page_rgb=lambda opened: opened,
+        normalize_page_rgb=lambda opened: opened.convert("RGB"),
         review_auto_fit_zoom=lambda *args: 1.0,
         replace=replace,
     )
     workflow._request_render_rows(review, deps, focus_index=0)
     assert len(observed) == 1
-    done = observed[0][2]
-    signature = ((id(row), row.x, row.y, row.word),)
-    crop = object()
-    return review, text, rendered, retried, lambda: done(
-        (page.stem, signature, [crop], 1.0, False)
-    )
+    _, worker, done, _ = observed[0]
+    payload = worker()
+    return review, text, rendered, retried, lambda: done(payload), observed
 
 
-def test_async_crop_with_changed_live_editor_text_is_rejected_and_requeued():
-    _view, text, rendered, retried, deliver = _case()
+def test_async_crop_with_changed_live_editor_text_is_rejected_and_requeued(tmp_path):
+    _view, text, rendered, retried, deliver, observed = _case(tmp_path)
     text.set("first was revised into a much longer human edit")
     deliver()
     assert rendered == [], "stale crop length was accepted despite changed Tk text"
     assert len(retried) == 1, "new editor revision needs its own crop worker"
     assert text.get() == "first was revised into a much longer human edit"
+    assert len(observed) == 1
 
 
-def test_async_crop_with_unchanged_live_editor_text_is_accepted():
-    _view, _text, rendered, retried, deliver = _case()
+def test_async_crop_with_unchanged_live_editor_text_is_accepted(tmp_path):
+    _view, _text, rendered, retried, deliver, observed = _case(tmp_path)
     deliver()
+    assert not rendered
+    _, verify, verified, _ = observed[1]
+    verified(verify())
     assert len(rendered) == 1
     assert retried == []
+
+
+def test_async_crop_rechecks_live_editor_text_after_source_verification(tmp_path):
+    _view, text, rendered, retried, deliver, observed = _case(tmp_path)
+    deliver()
+    assert not rendered
+    _, verify, verified, _ = observed[1]
+    result = verify()
+    text.set("new unsaved edit")
+    verified(result)
+    assert rendered == []
+    assert len(retried) == 1
+    assert text.get() == "new unsaved edit"

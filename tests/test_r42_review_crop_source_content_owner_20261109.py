@@ -3,6 +3,7 @@
 Only temporary synthetic BMP pixels; no real scan, OCR, Tk root or saved project.
 """
 from dataclasses import dataclass, replace
+import os
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -30,14 +31,15 @@ def _normalize_and_notify(opened, after_read):
     return pixels
 
 
-def _start(page: Path, *, after_read=None, return_callbacks=False):
+def _start(page: Path, *, after_read=None):
     row = Entry()
-    callbacks, rendered, retried = [], [], []
+    callbacks, rendered, retried, errors = [], [], [], []
     parent = SimpleNamespace(
         project=object(), current_page=page, current_index=0, image=object(),
         settings=Settings(), canvas=SimpleNamespace(winfo_width=lambda: 800),
         _ordered_entries_reading_order=lambda: [row],
-        _start_ui_worker=lambda key, work, done, fail: callbacks.append((work, done)),
+        _start_ui_worker=lambda key, work, done, fail: callbacks.append((work, done, fail)),
+        status_var=SimpleNamespace(set=errors.append),
     )
     review = SimpleNamespace(
         parent=parent, vars=[SimpleNamespace(get=lambda: "synthetic")],
@@ -47,6 +49,7 @@ def _start(page: Path, *, after_read=None, return_callbacks=False):
         _bound_row_entries=lambda: [row], _review_image_area_width=lambda: 700,
         winfo_exists=lambda: True, render_rows=lambda **kw: rendered.append(kw),
         _request_render_rows=lambda **kw: retried.append(kw), editors=[],
+        rows=SimpleNamespace(winfo_children=lambda: [object()]),
     )
     deps = SimpleNamespace(
         ttk=SimpleNamespace(), tk=SimpleNamespace(TclError=RuntimeError),
@@ -61,16 +64,24 @@ def _start(page: Path, *, after_read=None, return_callbacks=False):
     assert len(callbacks) == 1
     # Execute the real crop worker against the original red synthetic image.
     payload = callbacks[0][0]()
-    assert payload[2][0].getpixel((0, 0)) == (255, 0, 0)
+    assert payload[0][0].getpixel((0, 0)) == (255, 0, 0)
     def deliver():
         callbacks[0][1](payload)
-    if return_callbacks:
-        return rendered, retried, deliver, callbacks
-    return rendered, retried, deliver
+    return rendered, retried, deliver, callbacks, errors
 
 
 def _write_bmp(page: Path, rgb):
     Image.new("RGB", (12, 12), rgb).save(page, format="BMP")
+
+
+def _deliver_worker(callback):
+    work, done, failed = callback
+    try:
+        payload = work()
+    except OSError as exc:
+        failed(exc, "")
+    else:
+        done(payload)
 
 
 def test_same_path_same_size_same_mtime_changed_pixels_reject_old_crop(tmp_path):
@@ -78,28 +89,31 @@ def test_same_path_same_size_same_mtime_changed_pixels_reject_old_crop(tmp_path)
     _write_bmp(page, (255, 0, 0))
     original = page.read_bytes()
     stamp = page.stat()
-    rendered, retried, deliver = _start(page)
+    rendered, retried, deliver, callbacks, errors = _start(page)
     _write_bmp(page, (0, 0, 255))
-    import os
     os.utime(page, ns=(stamp.st_atime_ns, stamp.st_mtime_ns))
     assert page.read_bytes() != original
     assert page.stat().st_size == stamp.st_size
     assert page.stat().st_mtime_ns == stamp.st_mtime_ns
     deliver()
+    assert not rendered, "crop was rendered before verification"
+    assert len(callbacks) == 2
+    _deliver_worker(callbacks[1])
     assert not rendered, "old crop pixels were painted after source content changed"
+    assert errors and not retried
 
 
 def test_same_path_unchanged_pixels_accept_crop(tmp_path):
     page = tmp_path / "page.bmp"
     _write_bmp(page, (255, 0, 0))
-    rendered, retried, deliver, callbacks = _start(page, return_callbacks=True)
+    rendered, retried, deliver, callbacks, errors = _start(page)
     deliver()
     assert len(callbacks) == 2, "crop must be verified asynchronously before rendering"
     assert not rendered, "unverified crop was painted"
     verification_payload = callbacks[1][0]()
     callbacks[1][1](verification_payload)
     assert len(rendered) == 1, "unchanged source must render after verification"
-    assert not retried
+    assert not retried and not errors
 
 
 def test_source_replaced_while_worker_is_cropping_reject_old_pixels(tmp_path):
@@ -111,15 +125,18 @@ def test_source_replaced_while_worker_is_cropping_reject_old_pixels(tmp_path):
     def replace_during_worker():
         # Worker has read red pixels; mutate the same path before crop finishes.
         _write_bmp(page, (0, 0, 255))
-        import os
         os.utime(page, ns=(stamp.st_atime_ns, stamp.st_mtime_ns))
 
-    rendered, retried, deliver = _start(page, after_read=replace_during_worker)
+    rendered, retried, deliver, callbacks, errors = _start(page, after_read=replace_during_worker)
     assert page.read_bytes() != original
     assert page.stat().st_size == stamp.st_size
     assert page.stat().st_mtime_ns == stamp.st_mtime_ns
     deliver()
+    assert not rendered, "crop was rendered before verification"
+    assert len(callbacks) == 2
+    _deliver_worker(callbacks[1])
     assert not rendered, "worker crop from pre-replacement pixels was painted"
+    assert errors and not retried
 
 
 def test_verification_worker_rechecks_source_after_its_own_read(tmp_path):
@@ -127,13 +144,13 @@ def test_verification_worker_rechecks_source_after_its_own_read(tmp_path):
     page = tmp_path / "page.bmp"
     _write_bmp(page, (255, 0, 0))
     stamp = page.stat()
-    rendered, retried, deliver, callbacks = _start(page, return_callbacks=True)
+    rendered, retried, deliver, callbacks, errors = _start(page)
     deliver()
     assert len(callbacks) == 2, "crop callback must schedule nonblocking source verification"
     assert not rendered, "crop was rendered before asynchronous verification"
     verification_payload = callbacks[1][0]()
     _write_bmp(page, (0, 0, 255))
-    import os
     os.utime(page, ns=(stamp.st_atime_ns, stamp.st_mtime_ns))
     callbacks[1][1](verification_payload)
     assert not rendered, "source changed after verification read; stale crop was rendered"
+    assert errors and not retried
