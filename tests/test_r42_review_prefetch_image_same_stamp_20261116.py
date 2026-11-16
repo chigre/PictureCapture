@@ -1,6 +1,7 @@
 """Synthetic adjacent-page cache ownership when source BMP bytes change."""
 import os
 
+import pytest
 from PIL import Image
 
 from test_r42_review_prefetch_section_same_stamp_20261107 import _fixture
@@ -21,7 +22,10 @@ def _cached_bmp(tmp_path):
     return page, review, deps
 
 
-def test_same_stamp_changed_image_bytes_reject_cached_adjacent_crop(tmp_path):
+@pytest.mark.parametrize("stable_metadata", [False, True])
+def test_same_stamp_changed_image_bytes_reject_cached_adjacent_crop(tmp_path, monkeypatch, stable_metadata):
+    if stable_metadata:
+        monkeypatch.setattr(lifecycle, "source_file_stamp", lambda stream: (1, 2, 486, 3, 4))
     page, review, deps = _cached_bmp(tmp_path)
     original = page.read_bytes()
     stamp = page.stat()

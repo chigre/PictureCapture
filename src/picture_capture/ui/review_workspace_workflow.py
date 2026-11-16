@@ -13,7 +13,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 from ..proofreading.simplified_review import source_word_conflicts
-from ..runtime.source_file_stamp import source_file_stamp
+from ..runtime.source_file_stamp import source_file_digest, source_file_stamp
 
 if TYPE_CHECKING:
     import tkinter as tk
@@ -782,25 +782,19 @@ def _request_render_rows(
         crops, effective_zoom, source_digest = payload
 
         def verify_source():
-            digest = sha256()
-            with page.open("rb") as stream:
-                before = source_file_stamp(stream)
-                for chunk in iter(lambda: stream.read(1024 * 1024), b""):
-                    digest.update(chunk)
-                after = source_file_stamp(stream)
-            if before != after or digest.digest() != source_digest:
+            witness = source_file_digest(page, stamp=source_file_stamp)
+            if witness[1] != source_digest:
                 raise OSError("源图已变化，请重新加载页面后重试")
-            return after
+            return witness
 
-        def verified(source_stamp) -> None:
+        def verified(witness) -> None:
             if not owner_is_current():
                 return
             try:
-                # Reopen the live path to catch replacement after the second
-                # read. The Tk callback queries metadata only.
-                with page.open("rb") as stream:
-                    if source_file_stamp(stream) != source_stamp:
-                        raise OSError("源图已变化，请重新加载页面后重试")
+                # A timestamp-preserving rewrite can survive even the
+                # change-time check. Verify the complete bytes before paint.
+                if source_file_digest(page, stamp=source_file_stamp) != witness:
+                    raise OSError("源图已变化，请重新加载页面后重试")
             except OSError as exc:
                 failed(exc, "")
                 return

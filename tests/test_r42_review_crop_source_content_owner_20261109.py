@@ -7,6 +7,7 @@ import os
 from pathlib import Path
 from types import SimpleNamespace
 
+import pytest
 from PIL import Image
 from picture_capture.ui import review_workspace_workflow as flow
 
@@ -139,8 +140,12 @@ def test_source_replaced_while_worker_is_cropping_reject_old_pixels(tmp_path):
     assert errors and not retried
 
 
-def test_verification_worker_rechecks_source_after_its_own_read(tmp_path):
+@pytest.mark.parametrize("stable_metadata", [False, True])
+def test_verification_worker_rechecks_source_after_its_own_read(tmp_path, monkeypatch, stable_metadata):
     """A second async content check must not authorize an obsolete crop."""
+    if stable_metadata:
+        # Some filesystems expose equal metadata across a rewrite and mtime reset.
+        monkeypatch.setattr(flow, "source_file_stamp", lambda stream: (1, 2, 486, 3, 4))
     page = tmp_path / "page.bmp"
     _write_bmp(page, (255, 0, 0))
     stamp = page.stat()

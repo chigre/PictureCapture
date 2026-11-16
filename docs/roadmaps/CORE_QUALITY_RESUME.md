@@ -1,3 +1,12 @@
+## 2026-11-16 — R4.2 Windows crop content after metadata-preserving rewrite
+
+- [Exact Windows RED](https://github.com/chigre/PictureCapture/actions/runs/43886537924) at `3bfd5d316bc5a98fed36893a37ded0ba24b0b212`. Windows Python 3.13: 1 failed / 5782 passed / 3 skipped (adjacent prefetch). Windows Python 3.10: 1 failed / 5783 passed / 2 skipped (foreground final delivery). Four other matrix jobs and Risk tier succeeded. Risk-tier gate failed. Documentation architecture SKIPPED.
+- Controlled stable-metadata variants reproduce both cases locally **2 failed / 6 passed**. The original unmocked BMP tests remain active. Final foreground publication compares a fresh streamed SHA-256 with the worker witness. Adjacent prefetch includes a complete byte digest at key checks. I/O is bounded in memory, but strict final publication verification and adjacent prefetch key checks may read source bytes on Tk. No latency benchmark has been run.
+- Local related GREEN **238 passed**, architecture and change guards and F821 passed. The repair needs independent exact-head gates.
+- **Next action.** Read live #663 HEAD and verify its six platform/Python jobs, both Risk jobs, OCR three platforms and CodeQL Python/Actions. Read any Windows failure log first. Once the gates pass, continue the local RED-to-GREEN same-path row-height crop image-owner case in review_crop_actions.py before the next synthetic R3/R5-R7 work.
+- Separate row-height candidate has local RED **1 failed / 1 positive control passed** and **55 related passed**. It rejects the worker callback when the main window replaces its in-memory image at the same path while preserving the row generation.
+- Human/real-data acceptance remains **NOT PERFORMED/DEFERRED**.
+
 ## 2026-11-16 — R3 ordinary ReviewWindow uncertain autosave
 
 - A write exception can quarantine PDIC after the editor and the in-memory Entry both show the same changed word. The next ordinary autosave took the clean-text fast path, cleared the unconfirmed flag, and let a successful PPP update report general autosave success.

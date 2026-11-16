@@ -8,7 +8,7 @@ from dataclasses import dataclass
 from hashlib import sha256
 from typing import TYPE_CHECKING
 
-from ..runtime.source_file_stamp import source_file_stamp
+from ..runtime.source_file_stamp import source_file_digest, source_file_stamp
 
 if TYPE_CHECKING:
     import tkinter as tk
@@ -525,10 +525,9 @@ def _prefetch_path_signature(deps: ReviewPageDeps, path: Path) -> tuple[bool, in
         return False, 0, 0
 
 
-def _prefetch_image_signature(page: Path) -> tuple[int, ...] | object:
+def _prefetch_image_signature(page: Path) -> tuple[tuple[int, ...], bytes] | object:
     try:
-        with page.open("rb") as stream:
-            return source_file_stamp(stream)
+        return source_file_digest(page, stamp=source_file_stamp)
     except OSError:
         # Each failed observation invalidates any cached or in-flight image.
         return object()

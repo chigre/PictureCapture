@@ -12,3 +12,9 @@ Adjacent-page prefetch has a separate publication path. Its image key uses size 
 Foreground source repair [a9c5bb9c](https://github.com/chigre/PictureCapture/commit/a9c5bb9c990ca8ae091f3bd7240e4bdb184b1373) exact [CI](https://github.com/chigre/PictureCapture/actions/runs/43884146847) six matrix and Risk tier/final gate SUCCESS, Ubuntu Python 3.13 **5780 passed / 3 skipped**, [OCR](https://github.com/chigre/PictureCapture/actions/runs/43884147043) 3/3 SUCCESS and [CodeQL](https://github.com/chigre/PictureCapture/actions/runs/43884135175) 2/2 SUCCESS. Documentation architecture SKIPPED.
 
 Adjacent prefetch uses one source metadata witness across request, worker completion and consumption. The handle key observes filesystem file identity, size, modification time and change time. Full foreground source hashing remains in its existing workers. The adjacent-page test exercises a stale and unchanged synthetic BMP. Local RED 1 failed / 1 passed and GREEN 2 targeted / 236 related / 5782 full passed / 3 skipped. Its exact remote gates are pending at this checkpoint.
+
+## Windows metadata counterexample and byte verification
+
+Windows Python 3.13: 1 failed / 5782 passed / 3 skipped (adjacent prefetch). Windows Python 3.10: 1 failed / 5783 passed / 2 skipped (foreground final delivery). Four other matrix jobs and Risk tier succeeded. Risk-tier gate failed. Documentation architecture SKIPPED.
+
+The final foreground callback compares a fresh full digest and file metadata with the background verifier witness. The adjacent prefetch key now includes the full source digest. Both use bounded chunks. These final observations can do file I/O on Tk and do not create filesystem atomicity. The original Windows tests remain, with deterministic equal-metadata variants adding two failures before the source change. The repair exact-head gates must be verified separately.

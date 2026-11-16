@@ -2,6 +2,8 @@
 from __future__ import annotations
 
 import os
+from hashlib import sha256
+from pathlib import Path
 from typing import BinaryIO
 
 
@@ -35,3 +37,15 @@ def source_file_stamp(stream: BinaryIO) -> tuple[int, ...]:
             raise ctypes.WinError()
         change_time = info.change_time
     return stat.st_dev, stat.st_ino, stat.st_size, stat.st_mtime_ns, change_time
+
+
+def source_file_digest(path: Path, *, stamp=source_file_stamp) -> tuple[tuple[int, ...], bytes]:
+    """Stream the complete source and reject metadata changes during the read."""
+    digest = sha256()
+    with path.open("rb") as stream:
+        before = stamp(stream)
+        for chunk in iter(lambda: stream.read(1024 * 1024), b""):
+            digest.update(chunk)
+        if stamp(stream) != before:
+            raise OSError("源图已变化，请重新加载页面后重试")
+    return before, digest.digest()
