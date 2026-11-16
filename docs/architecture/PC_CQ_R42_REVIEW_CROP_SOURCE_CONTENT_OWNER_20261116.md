@@ -6,3 +6,9 @@
 - Local Python 3.13: **4 targeted passed**, **213 related passed**, **5780 full passed / 3 skipped**. Architecture guard, change guard and F821 passed. Acceptance requires the repair commit's exact-head CI, OCR and CodeQL. Source verification is bounded by the final filesystem observation. Manual and real-data acceptance stays deferred.
 
 Adjacent-page prefetch has a separate publication path. Its image key uses size and mtime and a same-path BMP rewrite with those values preserved reproduced stale crop acceptance locally. Follow the adjacent-page prefetch checkpoint after the repair gates complete.
+
+## Exact foreground gates and adjacent prefetch
+
+Foreground source repair [a9c5bb9c](https://github.com/chigre/PictureCapture/commit/a9c5bb9c990ca8ae091f3bd7240e4bdb184b1373) exact [CI](https://github.com/chigre/PictureCapture/actions/runs/43884146847) six matrix and Risk tier/final gate SUCCESS, Ubuntu Python 3.13 **5780 passed / 3 skipped**, [OCR](https://github.com/chigre/PictureCapture/actions/runs/43884147043) 3/3 SUCCESS and [CodeQL](https://github.com/chigre/PictureCapture/actions/runs/43884135175) 2/2 SUCCESS. Documentation architecture SKIPPED.
+
+Adjacent prefetch uses one source metadata witness across request, worker completion and consumption. The handle key observes filesystem file identity, size, modification time and change time. Full foreground source hashing remains in its existing workers. The adjacent-page test exercises a stale and unchanged synthetic BMP. Local RED 1 failed / 1 passed and GREEN 2 targeted / 236 related / 5782 full passed / 3 skipped. Its exact remote gates are pending at this checkpoint.

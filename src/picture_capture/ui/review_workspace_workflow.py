@@ -9,54 +9,22 @@ from __future__ import annotations
 from dataclasses import dataclass
 from hashlib import sha256
 from io import BytesIO
-import os
 from pathlib import Path
-from typing import BinaryIO, TYPE_CHECKING
+from typing import TYPE_CHECKING
 
 from ..proofreading.simplified_review import source_word_conflicts
+from ..runtime.source_file_stamp import source_file_stamp
 
 if TYPE_CHECKING:
     import tkinter as tk
     from PIL import Image
 
 
-def _crop_source_stamp(stream: BinaryIO) -> tuple[int, ...]:
-    stat = os.fstat(stream.fileno())
-    change_time = stat.st_ctime_ns
-    if os.name == "nt":
-        # Windows st_ctime is creation time. Read the filesystem change time
-        # from the same handle so rewriting bytes and restoring mtime is visible.
-        import ctypes
-        import msvcrt
-        from ctypes import wintypes
-
-        class FileBasicInfo(ctypes.Structure):
-            _fields_ = [
-                ("creation_time", ctypes.c_int64),
-                ("access_time", ctypes.c_int64),
-                ("write_time", ctypes.c_int64),
-                ("change_time", ctypes.c_int64),
-                ("attributes", wintypes.DWORD),
-            ]
-
-        info = FileBasicInfo()
-        query = ctypes.windll.kernel32.GetFileInformationByHandleEx
-        if not query(
-            wintypes.HANDLE(msvcrt.get_osfhandle(stream.fileno())),
-            0,  # FileBasicInfo
-            ctypes.byref(info),
-            ctypes.sizeof(info),
-        ):
-            raise ctypes.WinError()
-        change_time = info.change_time
-    return stat.st_dev, stat.st_ino, stat.st_size, stat.st_mtime_ns, change_time
-
-
 def _read_crop_source_bytes(path: Path) -> bytes:
     with path.open("rb") as stream:
-        before = _crop_source_stamp(stream)
+        before = source_file_stamp(stream)
         data = stream.read()
-        if _crop_source_stamp(stream) != before:
+        if source_file_stamp(stream) != before:
             raise OSError("源图已变化，请重新加载页面后重试")
     return data
 
@@ -816,10 +784,10 @@ def _request_render_rows(
         def verify_source():
             digest = sha256()
             with page.open("rb") as stream:
-                before = _crop_source_stamp(stream)
+                before = source_file_stamp(stream)
                 for chunk in iter(lambda: stream.read(1024 * 1024), b""):
                     digest.update(chunk)
-                after = _crop_source_stamp(stream)
+                after = source_file_stamp(stream)
             if before != after or digest.digest() != source_digest:
                 raise OSError("源图已变化，请重新加载页面后重试")
             return after
@@ -831,7 +799,7 @@ def _request_render_rows(
                 # Reopen the live path to catch replacement after the second
                 # read. The Tk callback queries metadata only.
                 with page.open("rb") as stream:
-                    if _crop_source_stamp(stream) != source_stamp:
+                    if source_file_stamp(stream) != source_stamp:
                         raise OSError("源图已变化，请重新加载页面后重试")
             except OSError as exc:
                 failed(exc, "")

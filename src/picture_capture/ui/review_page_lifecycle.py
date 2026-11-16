@@ -8,6 +8,8 @@ from dataclasses import dataclass
 from hashlib import sha256
 from typing import TYPE_CHECKING
 
+from ..runtime.source_file_stamp import source_file_stamp
+
 if TYPE_CHECKING:
     import tkinter as tk
     from pathlib import Path
@@ -515,6 +517,15 @@ def _prefetch_path_signature(deps: ReviewPageDeps, path: Path) -> tuple[bool, in
         return False, 0, 0
 
 
+def _prefetch_image_signature(page: Path) -> tuple[int, ...] | object:
+    try:
+        with page.open("rb") as stream:
+            return source_file_stamp(stream)
+    except OSError:
+        # Each failed observation invalidates any cached or in-flight image.
+        return object()
+
+
 def _prefetch_section_content_digest(path: Path) -> bytes | None | object:
     """Pin SECTION content even when an external copy preserves size/mtime.
 
@@ -546,7 +557,7 @@ def _page_prefetch_signature_for(cls, deps: ReviewPageDeps, project_root: Path, 
     ppp = ppp_read_path_for_image(page)
     section_path = page_sections_read_path_for_image(page)
     return (
-        cls._prefetch_path_signature(page),
+        (str(page), _prefetch_image_signature(page)),
         cls._prefetch_path_signature(pdic_path(page)),
         cls._prefetch_path_signature(ppp),
         cls._prefetch_path_signature(cache),

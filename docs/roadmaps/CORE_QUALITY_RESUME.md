@@ -1,3 +1,12 @@
+## 2026-11-16 — R4.2 adjacent ReviewWindow source-image cache
+
+- Foreground source repair [a9c5bb9c](https://github.com/chigre/PictureCapture/commit/a9c5bb9c990ca8ae091f3bd7240e4bdb184b1373) exact [CI](https://github.com/chigre/PictureCapture/actions/runs/43884146847) six matrix and Risk tier/final gate SUCCESS, Ubuntu Python 3.13 **5780 passed / 3 skipped**, [OCR](https://github.com/chigre/PictureCapture/actions/runs/43884147043) 3/3 SUCCESS and [CodeQL](https://github.com/chigre/PictureCapture/actions/runs/43884135175) 2/2 SUCCESS. Documentation architecture SKIPPED.
+- Adjacent prefetch local RED on the foreground repair tree **1 failed / 1 unchanged control passed**. A same-path red-to-blue synthetic BMP rewrite preserved size and mtime and returned the red cached crop.
+- The repair adds handle identity and filesystem change time to the image portion of the existing prefetch key and shares its source metadata helper with the foreground crop path. Revalidations at worker completion and cached-page consumption reject stale or unavailable image entries. The existing SECTION digest remains part of the key.
+- Local GREEN **2 targeted / 236 related / 5782 full passed / 3 skipped**. Architecture guard, change architecture guard and F821 passed. The adjacent-prefetch commit requires its own full exact-head gates. [Architecture audit](../architecture/PC_CQ_R42_REVIEW_CROP_SOURCE_CONTENT_OWNER_20261116.md).
+- **Next action.** Read live main/#663 and verify the adjacent-prefetch repair HEAD six platform/Python jobs, Risk tier/final gate, OCR three platforms and CodeQL Python/Actions. Inspect failure logs first, then audit a new R3 ordinary ReviewWindow or main-window save retry counterexample.
+- Windows R3 E3, #483 W1–W11, #503 human Undo/Redo, real scan/save/reopen, R6 real labels and R8 scans remain **NOT PERFORMED/DEFERRED**.
+
 ## 2026-11-16 — R4.2 ordinary ReviewWindow crop source content
 
 - Live authority before publishing: sole #663 Open/Draft/Unmerged, branch `refactor/562-retire-root-image-utils-20261024`, main `ec20989ea8c026cca5337293e67850b6b6df30f2`, zero review threads.
