@@ -18,3 +18,9 @@ Adjacent prefetch uses one source metadata witness across request, worker comple
 Windows Python 3.13: 1 failed / 5782 passed / 3 skipped (adjacent prefetch). Windows Python 3.10: 1 failed / 5783 passed / 2 skipped (foreground final delivery). Four other matrix jobs and Risk tier succeeded. Risk-tier gate failed. Documentation architecture SKIPPED.
 
 The final foreground callback compares a fresh full digest and file metadata with the background verifier witness. The adjacent prefetch key now includes the full source digest. Both use bounded chunks. These final observations can do file I/O on Tk and do not create filesystem atomicity. The original Windows tests remain, with deterministic equal-metadata variants adding two failures before the source change. The repair exact-head gates must be verified separately.
+
+## Same-path row-height callback ownership
+
+The debounced row-height worker in review_crop_actions.py reads the main window's captured image object. Before mutating any crop/photo/height state, the callback now verifies that the live image is still that object. Synthetic replacement at the same path and unchanged row generation gave local RED 1 failed / 1 positive passed. Local GREEN after rebasing was 53 related and 5786 full passed / 3 skipped.
+
+Exact Windows-content repair 374f4efb008757f7ad63f636a088d1a92e606a0d CI #43887827482 six matrix and Risk tier/gate SUCCESS. Ubuntu 3.13 5785 passed / 3 skipped. OCR #43887827611 3/3 SUCCESS. CodeQL #43887818270 2/2 SUCCESS. Documentation architecture SKIPPED.

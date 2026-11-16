@@ -1,3 +1,12 @@
+## 2026-11-16 — R4.2 row-height crop callback image owner
+
+- A same-path reload can replace the main window's in-memory image while a row-height worker is still pending and the ordinary review row generation is unchanged. The delayed callback could update the row with pixels from the old image.
+- Local RED **1 failed / 1 unchanged-generation control passed** on the source without the image check. The callback now revalidates the image object it used for crop calculation. Positive height-switch and stale-row-generation assertions remain active.
+- Local GREEN after rebasing on `374f4efb008757f7ad63f636a088d1a92e606a0d`: **11 file tests passed, 53 related passed, 5786 full passed / 3 skipped**. Architecture guard, change guard and F821 passed. This commit requires its own remote gates.
+- **Previous exact HEAD.** Windows content repair [374f4efb](https://github.com/chigre/PictureCapture/commit/374f4efb008757f7ad63f636a088d1a92e606a0d) [CI](https://github.com/chigre/PictureCapture/actions/runs/43887827482) 6/6 and Risk tier/gate SUCCESS, Ubuntu 3.13 **5785 passed / 3 skipped**. [OCR](https://github.com/chigre/PictureCapture/actions/runs/43887827611) 3/3 and [CodeQL](https://github.com/chigre/PictureCapture/actions/runs/43887818270) 2/2 SUCCESS. Documentation architecture SKIPPED.
+- **Next action.** Read live #663 HEAD and verify its six matrix jobs, both Risk jobs, three OCR smoke jobs and CodeQL Python/Actions. Investigate failures from logs. After GREEN, exercise a new ordinary Review/main save retry or R4.2 pending-edit/callback owner case, then synthetic R5-R7.
+- Human/real-data acceptance remains **NOT PERFORMED/DEFERRED**.
+
 ## 2026-11-16 — R4.2 Windows crop content after metadata-preserving rewrite
 
 - [Exact Windows RED](https://github.com/chigre/PictureCapture/actions/runs/43886537924) at `3bfd5d316bc5a98fed36893a37ded0ba24b0b212`. Windows Python 3.13: 1 failed / 5782 passed / 3 skipped (adjacent prefetch). Windows Python 3.10: 1 failed / 5783 passed / 2 skipped (foreground final delivery). Four other matrix jobs and Risk tier succeeded. Risk-tier gate failed. Documentation architecture SKIPPED.

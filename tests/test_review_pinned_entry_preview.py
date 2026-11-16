@@ -6,6 +6,7 @@ image between the black-framed active preview and the ordinary editor rows.
 from pathlib import Path
 from types import SimpleNamespace
 
+import pytest
 from PIL import Image
 
 from picture_capture.models import AppSettings, Entry
@@ -172,8 +173,6 @@ def test_pinned_crop_uses_exact_ordinary_top_and_bottom_only_extension():
     from picture_capture.proofreading.crop_extension import (
         extended_review_crop_box, parse_review_crop_multiplier,
     )
-    import pytest
-
     ordinary = (8, 35, 70, 55)
     assert extended_review_crop_box(ordinary, 250, 2.5) == (8, 35, 70, 85)
     assert extended_review_crop_box(ordinary, 70, 2.5) == (8, 35, 70, 70)
@@ -243,7 +242,8 @@ def test_live_single_character_crop_updates_only_its_row(monkeypatch):
     assert preview_calls == [0, 0]
 
 
-def test_delayed_crop_from_old_render_must_not_replace_new_rows(monkeypatch):
+@pytest.mark.parametrize("stale_owner", ["render_generation", "image"])
+def test_delayed_crop_from_old_render_must_not_replace_new_rows(monkeypatch, stale_owner):
     import picture_capture.app as app
     from pathlib import Path
 
@@ -276,7 +276,12 @@ def test_delayed_crop_from_old_render_must_not_replace_new_rows(monkeypatch):
     )
     app.ReviewWindow._refresh_review_row_crop(review, 0)
     before = review._review_display_crops[0]
-    review._review_crop_render_generation = 2
+    if stale_owner == "render_generation":
+        review._review_crop_render_generation = 2
+    else:
+        # A same-path reload can replace the image before the next review
+        # render increments its generation and rebuilds the row widgets.
+        parent.image = Image.new("RGB", image.size, "blue")
     worker, done = waiting[0]
     done(worker())
     assert review._review_display_crops[0] is before
