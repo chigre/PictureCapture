@@ -134,6 +134,14 @@ def autosave_commit(self, deps: ReviewPageDeps) -> bool:
         return False
     if not self.parent.project or not self.parent.current_page:
         return False
+    if getattr(self.parent, "_deferred_save_uncertain", False):
+        # A post-write error can leave both the model and editor showing the
+        # new text. Equality cannot clear an unresolved PDIC write outcome.
+        self._r3_autosave_unconfirmed = True
+        self.parent.status_var.set(
+            "先前校对保存结果未确认；输入仍保留，请核对磁盘与校对窗口后重试。"
+        )
+        return True
     state = self.parent._foreground_batch_state(self.parent.current_index)
     if state == "processing":
         # Processing owns this page: do not publish review text or let a

@@ -109,3 +109,29 @@ def test_verified_clean_review_can_clear_previous_unconfirmed_flag(monkeypatch):
     _install(monkeypatch, None)
     assert lifecycle.autosave_commit(review, None) is True
     assert review._r3_autosave_unconfirmed is False
+
+
+def test_uncertain_review_write_cannot_be_acknowledged_by_following_ppp_autosave(monkeypatch):
+    review, statuses = _review(dirty=False)
+    _install(monkeypatch, None)
+    app = review.parent
+    # After replacement and a subsequent write error, the model and editor
+    # can already agree. Only the quarantine flag distinguishes this case.
+    app._deferred_save_uncertain = True
+    app._batch_active = False
+    app.review_window = review
+    app.autosave_var = SimpleNamespace(get=lambda: True)
+    calls = []
+    app.save_pdic = lambda **_kw: pytest.fail("no main-PDIC fallback while quarantined")
+    app._save_normalized_ppp = lambda: calls.append("ppp") or True
+    app.toggle_autosave = lambda: calls.append("rearmed")
+    review.winfo_exists = lambda: True
+    review.autosave_commit = lambda: lifecycle.autosave_commit(review, None)
+
+    main_pdic_persistence.autosave_tick(
+        app, deps={"tk": SimpleNamespace(TclError=RuntimeError)},
+    )
+    assert calls == ["ppp", "rearmed"]
+    assert app._deferred_save_uncertain is True
+    assert review._r3_autosave_unconfirmed is True
+    assert "未确认" in statuses[-1]

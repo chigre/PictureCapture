@@ -1,3 +1,12 @@
+## 2026-11-16 — R3 ordinary ReviewWindow uncertain autosave
+
+- A write exception can quarantine PDIC after the editor and the in-memory Entry both show the same changed word. The next ordinary autosave took the clean-text fast path, cleared the unconfirmed flag, and let a successful PPP update report general autosave success.
+- Local RED at `d2b207c0decfbf2a0dafbeaddd14f4f6a66be382` **1 intended failure / 4 passing controls**. The existing quarantine flag now blocks acknowledgement in the ordinary ReviewWindow autosave path. Main-PDIC fallback stays blocked, PPP may save independently, and the timer re-arms with the pending-text status.
+- Local GREEN **5 targeted / 38 related / 5783 full passed / 3 skipped**. Architecture guard, change architecture guard and F821 passed. [Architecture audit](../architecture/PC_CQ_R3_AUTOSAVE_UNCERTAIN_WRITE_TRUTH_20261116.md).
+- **Previous exact HEAD.** Adjacent prefetch [d2b207c0](https://github.com/chigre/PictureCapture/commit/d2b207c0decfbf2a0dafbeaddd14f4f6a66be382) [CI](https://github.com/chigre/PictureCapture/actions/runs/43885267865) 6/6 and Risk tier/gate SUCCESS, Ubuntu Python 3.13 **5782 passed / 3 skipped**, [OCR](https://github.com/chigre/PictureCapture/actions/runs/43885267768) 3/3 SUCCESS, [CodeQL](https://github.com/chigre/PictureCapture/actions/runs/43885255381) 2/2 SUCCESS. Architecture documentation job SKIPPED.
+- **Next action.** Resolve live #663 HEAD and verify its six platform/Python jobs, Risk tier/final gate, three OCR smoke jobs and CodeQL Python/Actions. Investigate any failure from its job log, then reproduce a new independent main/ReviewWindow save retry or R4.2 owner case before R5–R7.
+- Windows R3 E3, #483 W1–W11, #503 human Undo/Redo, real scan/save/reopen, R6 real labels and R8 scans remain **NOT PERFORMED/DEFERRED**.
+
 ## 2026-11-16 — R4.2 adjacent ReviewWindow source-image cache
 
 - Foreground source repair [a9c5bb9c](https://github.com/chigre/PictureCapture/commit/a9c5bb9c990ca8ae091f3bd7240e4bdb184b1373) exact [CI](https://github.com/chigre/PictureCapture/actions/runs/43884146847) six matrix and Risk tier/final gate SUCCESS, Ubuntu Python 3.13 **5780 passed / 3 skipped**, [OCR](https://github.com/chigre/PictureCapture/actions/runs/43884147043) 3/3 SUCCESS and [CodeQL](https://github.com/chigre/PictureCapture/actions/runs/43884135175) 2/2 SUCCESS. Documentation architecture SKIPPED.
