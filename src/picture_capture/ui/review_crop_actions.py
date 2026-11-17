@@ -166,8 +166,7 @@ def _refresh_review_row_crop(self, deps: ReviewCropDeps, index: int) -> None:
                     or index >= len(self._review_row_pictures)
                     or index >= len(self._bound_row_entries())
                     or self._bound_row_entries()[index] is not entry
-                    or _focused_review_is_single_character(
-                        self.vars[index].get()) != single):
+                    or self.vars[index].get() != text):
                 return
             self._review_display_crops[index] = crop
             photo = self._ordinary_review_photo(index)
