@@ -157,9 +157,7 @@ def test_repair_preserves_worker_sort_atomic_write_and_settings_reference(monkey
     ExportController(app).repair_pdic_order_selected_scope()
 
     assert app.calls == [
-        "flush",
-        "sync",
-        ("save", {"silent": True, "sync_editors": False}),
+        ("save", {"silent": True}),
     ]
     assert app.batch is not None
     title, indices, worker, done, kwargs = app.batch

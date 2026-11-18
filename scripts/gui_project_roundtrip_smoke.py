@@ -23,8 +23,8 @@ from picture_capture import __version__
 from picture_capture.io.formats import pdic_path, read_pdic, read_ppp, write_pdic, write_ppp
 from picture_capture.models import AppSettings, Entry, PolygonRegion
 from picture_capture.persistence.project_storage import (
-    ensure_project_storage, ppp_read_path_for_image, ppp_write_path_for_image,
-    profile_path, qt_root, settings_path,
+    ensure_project_storage, exports_root, ppp_read_path_for_image, ppp_write_path_for_image,
+    profile_path, qt_root, settings_path, simplified_review_path_for_image,
 )
 from picture_capture.profile.dictionary import (
     load_dictionary_profile, write_project_profile,
@@ -35,6 +35,7 @@ from picture_capture.persistence.page_sections import (
 )
 from picture_capture.persistence.project_storage import page_sections_path_for_image
 from picture_capture.proofreading.section import section_snapshot_for_source_point
+from picture_capture.proofreading.simplified_review import entry_key, read_records
 
 
 def _assert(condition: bool, message: str) -> None:
@@ -638,6 +639,56 @@ def main() -> int:
                     not app._save_normalized_ppp(),
                     "unchanged PPP save published a different document",
                 )
+
+                app.autosave_var.set(False)
+                app.toggle_autosave()
+                app.open_review()
+                review = app.review_window
+                _assert(review is not None, "real review window was not registered")
+                _pump_until(
+                    app, lambda: bool(review.vars and review.simplified_vars),
+                    seconds=20, description="render ordinary proofreading crops",
+                )
+                entry = review.row_entries[0]
+                new_word, new_simplified = "synthetic-proofread-export", "备份校对"
+                review.vars[0].set(new_word)
+                review.simplified_vars[0].set(new_simplified)
+                with patch.object(review, "save", return_value=False):
+                    app.on_close()
+                _assert(
+                    review.winfo_exists() and review.vars[0].get() == new_word
+                    and review.simplified_vars[0].get() == new_simplified,
+                    "failed main close discarded live proofreading edits",
+                )
+                _assert(
+                    _source_hash(pdic_path(first)) == pdic_before_section_clear,
+                    "refused main close published PDIC",
+                )
+
+                output = exports_root(root)
+                with patch.object(module.messagebox, "showinfo"):
+                    app.backup_pdic()
+                    _pump_until(
+                        app, lambda: not app._batch_active,
+                        seconds=20, description="backup with live proofreading edits",
+                    )
+                backups = list(output.glob("all_pdic_backup_*.txt"))
+                _assert(
+                    len(backups) == 1 and new_word in backups[0].read_text(encoding="utf-8"),
+                    "PDIC backup missed a live correction",
+                )
+                _assert(
+                    (new_word, entry.x, entry.y)
+                    in {(row.word, row.x, row.y) for row in read_pdic(pdic_path(first))},
+                    "backup preparation lost the corrected word's source coordinates",
+                )
+                simplified = read_records(simplified_review_path_for_image(first))
+                correction = simplified[entry_key(entry.x, entry.y)]
+                _assert(
+                    correction["text"] == new_simplified and correction["source_word"] == new_word,
+                    "backup preparation did not commit the paired simplified correction",
+                )
+
                 for path in (first, second):
                     _assert(
                         _source_hash(path) == original_hashes[path.name],
@@ -649,6 +700,7 @@ def main() -> int:
                     "two-page navigation; v3 Profile; production crop PNG pixel parity, " 
                     "PWWords/widths/plan; GUI CropController async parity; "
                     "SECTION edit/save/reopen/evidence; OCR guard and ordinary dispatch; "
+                    "proofreading close refusal and PDIC backup; "
                     "source image immutable",
                     flush=True,
                 )

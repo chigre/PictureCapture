@@ -5,6 +5,9 @@ Runs on the original Tk event thread with the existing public callbacks.
 from __future__ import annotations
 from typing import Any
 
+from .review_page_sync import focused_review_save_pending
+
+
 def on_close(self, *, deps: dict[str, Any]) -> None:
     messagebox = deps["messagebox"]
     tk = deps["tk"]
@@ -19,6 +22,18 @@ def on_close(self, *, deps: dict[str, Any]) -> None:
         self._batch_close_after_stop = True
         self._request_batch_stop()
         return
+
+    review = getattr(self, "review_window", None)
+    if focused_review_save_pending(review):
+        # Its Tk completion callback confirms the write and updates both
+        # editors. Let it run before shutdown starts invalidating callbacks.
+        try:
+            review_open = review.winfo_exists()
+        except tk.TclError:
+            review_open = True
+        if review_open:
+            self.status_var.set("筛选校对尚未完成保存，请在校对窗口完成保存后再退出。")
+            return
 
     # Durable one-shot workers must finish their success/error cleanup
     # boundary before the process can disappear. Never hide the only Tk
@@ -68,28 +83,35 @@ def on_close(self, *, deps: dict[str, Any]) -> None:
         return
 
     try:
-        self._cancel_system_appearance_poll()
-        self._ui_worker_shutdown = True
-        self._ui_close_requested = True
-        for key in tuple(self._ui_worker_generations):
-            self._invalidate_ui_worker(key)
-        if self._ui_worker_poll_job is not None:
+        if self.project and self.current_page and self.image is not None:
+            self.save_pdic(silent=True)
+            self._save_normalized_ppp()
+            self.settings.to_json(settings_path(self.project.root))
+        else:
+            self._flush_deferred_page_save()
+        self._save_session_state()
+    except (OSError, RuntimeError, ValueError, tk.TclError):
+        if self._ui_close_requested:
+            self._ui_close_requested = False
             try:
-                self.after_cancel(self._ui_worker_poll_job)
+                self.deiconify()
             except tk.TclError:
                 pass
-            self._ui_worker_poll_job = None
-        self._flush_deferred_page_save()
-        if self.project and self.current_page and self.image is not None:
-            try:
-                self.save_pdic(silent=True)
-                self._save_normalized_ppp()
-                self.settings.to_json(settings_path(self.project.root))
-            except (OSError, ValueError, tk.TclError):
-                pass
-        self._save_session_state()
-    finally:
-        self.destroy()
+        self.status_var.set("保存失败或状态未确认，程序保持打开；请核对当前项目后重试退出。")
+        return
+
+    self._cancel_system_appearance_poll()
+    self._ui_worker_shutdown = True
+    self._ui_close_requested = True
+    for key in tuple(self._ui_worker_generations):
+        self._invalidate_ui_worker(key)
+    if self._ui_worker_poll_job is not None:
+        try:
+            self.after_cancel(self._ui_worker_poll_job)
+        except tk.TclError:
+            pass
+        self._ui_worker_poll_job = None
+    self.destroy()
 
 
 # The source-coordinate safety policy is pure and belongs with the main UI

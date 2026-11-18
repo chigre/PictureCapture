@@ -303,3 +303,52 @@ def test_failed_explicit_close_retry_keeps_window_visible_and_close_intent():
     assert invalidated == []
     assert withdrawn == []
     assert sentinel not in repr(status.messages)
+
+
+def test_main_close_leaves_focused_save_callback_live():
+    app, invalidated, withdrawn, status = _close_app(after=None, after_idle=None)
+    app.review_window = SimpleNamespace(
+        _filter_rows_active=True, _filter_save_running=True, winfo_exists=lambda: True,
+    )
+
+    lifecycle.on_close(app, deps=_close_deps())
+
+    assert not app._ui_close_requested
+    assert not invalidated and not withdrawn
+    assert app._ui_worker_handlers and app._ui_worker_close_wait
+    assert "筛选校对" in status.messages[-1]
+
+
+def test_main_close_reopens_after_save_failure_and_allows_retry():
+    app, invalidated, withdrawn, status = _close_app(
+        after=None, after_idle=None, close_requested=True,
+    )
+    app._ui_worker_close_wait.clear()
+    app.project = SimpleNamespace(root="project")
+    app.current_page, app.image = "page.png", object()
+    app.settings = SimpleNamespace(to_json=lambda _path: None)
+    calls = []
+    error = RuntimeError("synthetic save refusal")
+
+    def save(*, silent):
+        assert silent
+        calls.append("save")
+        if calls.count("save") == 1:
+            raise error
+
+    app.save_pdic = save
+    app._save_normalized_ppp = lambda: calls.append("ppp")
+    app._save_session_state = lambda: calls.append("session")
+    app._cancel_system_appearance_poll = lambda: calls.append("cancel")
+    app.deiconify = lambda: calls.append("visible")
+    app.destroy = lambda: calls.append("destroy")
+
+    lifecycle.on_close(app, deps=_close_deps())
+    assert calls == ["save", "visible"]
+    assert not app._ui_close_requested and not app._ui_worker_shutdown
+    assert not invalidated and not withdrawn
+    assert "程序保持打开" in status.messages[-1]
+
+    lifecycle.on_close(app, deps=_close_deps())
+    assert calls == ["save", "visible", "save", "ppp", "session", "cancel", "destroy"]
+    assert app._ui_close_requested and app._ui_worker_shutdown

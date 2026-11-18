@@ -5333,7 +5333,7 @@ def test_v21110_backup_pdic_is_background_and_streaming():
     assert 'temp.open("w", encoding="utf-8", newline="\\n")' in body
     assert 'source.read_text(encoding="utf-8-sig").splitlines()' in body
     assert 'stream.write("\\n".join(page_lines))' in body
-    assert 'os.replace(temp, target)' in body
+    assert '_finish_text_export(' in body
     assert 'lines: list[str]' not in body
     assert '"\\n".join(lines)' not in body
 

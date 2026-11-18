@@ -187,6 +187,39 @@ def test_main_save_with_open_review_uses_paired_review_transaction(tmp_path, mon
     assert recorded == [("review", {"redraw_main": False})]
 
 
+@pytest.mark.parametrize("failure", ["tk", "stale_rows"])
+def test_main_save_refuses_unconfirmed_ordinary_review_owner(tmp_path, failure):
+    from tkinter import TclError
+    from picture_capture.ui import main_pdic_persistence as persistence
+
+    app, entry, page = _app(tmp_path)
+    app.project = SimpleNamespace(root=tmp_path)
+    app.image = SimpleNamespace(width=100)
+    app._deferred_save_snapshot = None
+    original_pdic = pdic_path(page).read_bytes()
+
+    def exists():
+        if failure == "tk":
+            raise TclError("editor still unavailable")
+        return True
+
+    app.review_window = SimpleNamespace(
+        winfo_exists=exists,
+        _filter_rows_active=False,
+        _rendered_page_stem="previous-page",
+        vars=[Var("editing")],
+        save=lambda **_kwargs: False,
+    )
+    with pytest.raises((RuntimeError, TclError), match="(校对窗口|unavailable)"):
+        persistence.save_pdic(
+            app, deps={"tk": SimpleNamespace(TclError=TclError),
+                       "pdic_path": pdic_path, "write_pdic": write_pdic},
+        )
+    assert entry.word == "before"
+    assert app.review_window.vars[0].get() == "editing"
+    assert pdic_path(page).read_bytes() == original_pdic
+
+
 def test_main_save_refuses_uncertain_focused_review_before_pdic_write(tmp_path):
     """A pending focused writer is still allowed to own the same PDIC file."""
     from picture_capture.ui import main_pdic_persistence as persistence

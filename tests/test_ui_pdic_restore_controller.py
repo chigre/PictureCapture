@@ -61,7 +61,7 @@ class _RestoreApp:
     def _sync_entry_editor_texts(self) -> None:
         self.calls.append(("sync",))
 
-    def save_pdic(self, *, silent: bool, sync_editors: bool) -> None:
+    def save_pdic(self, *, silent: bool, sync_editors: bool = True) -> None:
         self.calls.append(("save", silent, sync_editors))
 
     def show_error(self, title: str, exc: Exception) -> None:
@@ -152,7 +152,7 @@ def test_restore_preparation_failure_uses_exact_error(monkeypatch, tmp_path) -> 
     _patch_restore_dialogs(monkeypatch, source)
     problem = OSError("save failed")
 
-    def fail_save(*, silent: bool, sync_editors: bool) -> None:
+    def fail_save(*, silent: bool, sync_editors: bool = True) -> None:
         app.calls.append(("save", silent, sync_editors))
         raise problem
 
@@ -208,11 +208,9 @@ def test_restore_worker_parse_once_atomic_page_commit_and_done_refresh(monkeypat
 
     ExportController(app).restore_from_pdic_backup()
 
-    assert app.calls[:6] == [
+    assert app.calls[:4] == [
         ("selected",),
-        ("flush",),
-        ("sync",),
-        ("save", True, False),
+        ("save", True, True),
         ("pages_tuple", 0),
         ("pages_tuple", 1),
     ]

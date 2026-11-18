@@ -6,6 +6,9 @@ invariants. The public app methods inject patched IO/Tk collaborators at call ti
 from __future__ import annotations
 from typing import Any, TYPE_CHECKING
 from pathlib import Path
+
+from .review_page_sync import focused_review_save_pending
+
 if TYPE_CHECKING:
     from ..models import Entry as WordEntry
     import tkinter as tk
@@ -69,27 +72,20 @@ def save_pdic(self, silent: bool = False, sync_editors: bool = True, *, deps: di
     # review save could overwrite it or fail forever.
     if sync_editors:
         review = getattr(self, "review_window", None)
-        active_review = False
-        if review is not None:
-            try:
-                active_review = bool(review.winfo_exists())
-            except (AttributeError, tk.TclError):
-                active_review = False
-        if active_review and getattr(review, "_filter_rows_active", False):
-            if (
-                getattr(review, "_filter_save_running", False)
-                or getattr(review, "_filter_pending_changes", None)
-                or getattr(review, "_filter_save_uncertain_pages", None)
-                or getattr(review, "_filter_save_launch_failed", False)
-            ):
+        if review is not None and review.winfo_exists():
+            if focused_review_save_pending(review):
                 raise RuntimeError("筛选校对尚有未确认修改；请完成或核对筛选保存后再保存主界面")
-        elif (
-            active_review
-            and getattr(review, "_rendered_page_stem", None) == self.current_page.stem
-        ):
-            if review.save(redraw_main=False) is False:
-                raise RuntimeError("校对窗口拒绝保存，主界面文字仍保留；请核对后重试")
-            return
+            if (
+                not getattr(review, "_filter_rows_active", False)
+                and (
+                    getattr(review, "_rendered_page_stem", None) == self.current_page.stem
+                    or getattr(review, "vars", ())
+                    or getattr(review, "simplified_vars", ())
+                )
+            ):
+                if review.save(redraw_main=False) is False:
+                    raise RuntimeError("校对窗口拒绝保存，主界面文字仍保留；请核对后重试")
+                return
     # Commit live state; cancel any older queued checkbox snapshot.
     deferred_job = self.__dict__.get("_deferred_save_job")
     if deferred_job is not None:
@@ -172,17 +168,7 @@ def autosave_tick(self, *, deps: dict[str, Any]) -> None:
                 # PPP saving does not prove the human PDIC was published.
                 # The filtered callback can still be in flight or uncertain
                 # even when a separate polygon save succeeded.
-                focused_unsettled = bool(
-                    review is not None
-                    and getattr(review, "_filter_rows_active", False)
-                    and (
-                        getattr(review, "_filter_save_running", False)
-                        or getattr(review, "_filter_pending_changes", None)
-                        or getattr(review, "_filter_save_uncertain_pages", None)
-                        or getattr(review, "_filter_save_launch_failed", False)
-                    )
-                )
-                if focused_unsettled:
+                if focused_review_save_pending(review):
                     self.status_var.set(
                         "其他页面内容已自动保存，但筛选校对文字未保存或未确认；"
                         "输入仍保留，请核对筛选保存后重试。"

@@ -10,6 +10,19 @@ import tkinter as tk
 from typing import Any
 
 
+def focused_review_save_pending(review: Any) -> bool:
+    """Whether focused proofreading still owns unconfirmed changes."""
+    return bool(
+        getattr(review, "_filter_rows_active", False)
+        and (
+            getattr(review, "_filter_save_running", False)
+            or getattr(review, "_filter_pending_changes", None)
+            or getattr(review, "_filter_save_uncertain_pages", None)
+            or getattr(review, "_filter_save_launch_failed", False)
+        )
+    )
+
+
 def _live_review(app: Any) -> Any | None:
     review = getattr(app, "review_window", None)
     if review is None:

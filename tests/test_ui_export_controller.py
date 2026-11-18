@@ -4,6 +4,8 @@ import ast
 from pathlib import Path
 from types import SimpleNamespace
 
+import pytest
+
 import picture_capture.ui.controllers.export as export_module
 from picture_capture.ui.controllers.export import ExportController
 
@@ -415,7 +417,7 @@ def test_export_picdic_index_prepare_failure_preserves_error_contract(tmp_path) 
 
     ExportController(app).export_picdic_index()
 
-    assert app.calls == [("flush",), ("sync",), ("save_pdic", True, False)]
+    assert app.calls == [("save_pdic", True, True)]
     assert app.errors == [("导出PicDic索引失败", problem)]
     assert app.batch is None
 
@@ -432,7 +434,7 @@ def test_export_picdic_index_no_saved_pdic_shows_existing_info(monkeypatch, tmp_
 
     ExportController(app).export_picdic_index()
 
-    assert app.calls == [("flush",), ("sync",), ("save_pdic", True, False)]
+    assert app.calls == [("save_pdic", True, True)]
     assert dialogs == [("导出PicDic索引", "当前项目没有可导出的 PDIC 文件。", app)]
     assert app.batch is None
 
@@ -460,7 +462,7 @@ def test_export_picdic_index_streams_and_atomically_publishes(monkeypatch, tmp_p
 
     ExportController(app).export_picdic_index()
 
-    assert app.calls[:3] == [("flush",), ("sync",), ("save_pdic", True, False)]
+    assert app.calls[0] == ("save_pdic", True, True)
     assert app.batch is not None
     title, items, worker, done, kwargs = app.batch
     assert title == "导出PicDic索引"
@@ -588,6 +590,55 @@ def test_export_picdic_index_wiring_keeps_app_wrapper_and_format_boundaries() ->
     assert '("导出PicDic索引", "export_picdic_index")' in menu
 
 
+@pytest.mark.parametrize(("action", "title"), [
+    ("export_picdic_index", "导出PicDic索引失败"),
+    ("backup_pdic", "备份PDIC失败"),
+])
+def test_text_export_close_failure_does_not_publish_partial_file(
+    monkeypatch, tmp_path, action, title,
+):
+    page, = _prepare_index_files(tmp_path, ("001.jpg",))
+    app = _IndexApp(tmp_path, [page])
+    output = tmp_path / "output"
+    output.mkdir()
+    real_open = Path.open
+    problem = OSError("disk full while flushing")
+
+    class FailingStream:
+        def __init__(self, stream):
+            self.stream = stream
+
+        def write(self, text):
+            return self.stream.write(text)
+
+        def flush(self):
+            raise problem
+
+        def close(self):
+            self.stream.close()
+            self.flush()
+
+    def open_with_close_failure(path, mode="r", *args, **kwargs):
+        stream = real_open(path, mode, *args, **kwargs)
+        return FailingStream(stream) if path.parent == output and mode == "w" else stream
+
+    monkeypatch.setattr(Path, "open", open_with_close_failure)
+    monkeypatch.setattr(export_module, "exports_root", lambda _root: output)
+    monkeypatch.setattr(export_module, "read_picdic_index_records", lambda *_a, **_k: ["word"])
+    monkeypatch.setattr(
+        export_module.messagebox, "showinfo", lambda *_a, **_k: pytest.fail("reported success"),
+    )
+
+    getattr(ExportController(app), action)()
+    _, _, worker, done, _ = app.batch
+    result = worker(page, 1, 1)
+    done(1, 1, False, [result], None)
+
+    assert list(output.iterdir()) == []
+    assert app.errors == [(title, problem)]
+    assert not app.status_var.values
+
+
 def _prepare_backup_files(tmp_path: Path, names=("001.jpg", "002.jpg")):
     pages = [tmp_path / name for name in names]
     for page in pages:
@@ -631,7 +682,7 @@ def test_backup_pdic_prepare_failure_preserves_error_contract(tmp_path) -> None:
 
     ExportController(app).backup_pdic()
 
-    assert app.calls == [("flush",), ("sync",), ("save_pdic", True, False)]
+    assert app.calls == [("save_pdic", True, True)]
     assert app.errors == [("备份PDIC失败", problem)]
     assert app.batch is None
 
@@ -648,7 +699,7 @@ def test_backup_pdic_no_saved_pdic_shows_existing_info(monkeypatch, tmp_path) ->
 
     ExportController(app).backup_pdic()
 
-    assert app.calls == [("flush",), ("sync",), ("save_pdic", True, False)]
+    assert app.calls == [("save_pdic", True, True)]
     assert dialogs == [("备份PDIC", "当前项目没有可备份的 PDIC 文件。", app)]
     assert app.batch is None
 
@@ -670,7 +721,7 @@ def test_backup_pdic_streams_filters_blank_lines_and_atomically_publishes(monkey
 
     ExportController(app).backup_pdic()
 
-    assert app.calls[:3] == [("flush",), ("sync",), ("save_pdic", True, False)]
+    assert app.calls[0] == ("save_pdic", True, True)
     assert app.batch is not None
     title, items, worker, done, kwargs = app.batch
     assert title == "备份PDIC"
