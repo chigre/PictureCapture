@@ -1,3 +1,10 @@
+## 2026-11-18 — R7.3 legacy orthogonal replay and cross-platform save fixtures
+
+- Six synthetic failures reproduced coercion of legacy grid counts and gains and malformed step containers. All **17** scalar tests and **170** related tests passed after the repair. Combined local Python 3.12 full suite **5817 passed / 3 skipped**. [R7.3 audit](../architecture/R7_3_LEGACY_ORTHOGONAL_REPLAY_20261118.md).
+- R3 checkpoint `e73553fe2023a43627e52f8c66dd90c5751dbff3` passed OCR and CodeQL, but its first CI run failed native macOS focused smoke and Windows 3.10 Tcl fixture setup. The smoke now registers the real review window and asserts that a forced autosave tick cannot overwrite a focused write awaiting its callback. The unit fixture reuses the Tcl interpreter with per-case variables and trace cleanup. [CI follow-up evidence](../architecture/R7_3_LEGACY_ORTHOGONAL_REPLAY_20261118.md#ci-follow-up-for-r3-and-r42).
+- **Next action.** Resolve live main and #663 HEAD, then verify the six OS/Python jobs, both Risk jobs, OCR across three OS and CodeQL Python/Actions. Read failure logs first. After GREEN, test the persisted preprocessing analysis decoding boundary before the R7.3 coordinate map, including invalid step records that the decoder may silently discard.
+- Windows operator E3, #483 W1–W11, #503 Undo/Redo, real project scan/save/reopen, R6 labels and R8 scans remain **NOT PERFORMED / DEFERRED**.
+
 ## 2026-11-18 — R3 ordinary ReviewWindow retry and rollback ownership
 
 - Explicit Save now verifies both editor columns before claiming or saving a page and refuses an unresolved prior write. Error recovery revalidates exact PDIC and simplified bytes, the journal and both editor columns before restoring memory. Verified pre-publication failure remains retryable after a complete rebind.
