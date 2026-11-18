@@ -1,9 +1,10 @@
-## 2026-11-18 — R4.2 focused save debounce and periodic retry
+## 2026-11-18 — R4.2 focused save debounce, periodic retry and page navigation
 
 - Two local RED→GREEN work packages addressed in-flight edit timers surviving terminal save callbacks and periodic autosave granting explicit-retry permission to unresolved focused writes. RED counts were **2 failed / 2 passed** and **2 failed / 5 passed**. Combined local Python 3.12 GREEN **7 new / 240 related / 5798 full passed, 3 skipped**. Architecture guard, change guard and F821 passed. [Architecture audit and commit evidence](../architecture/PC_CQ_R42_FOCUSED_SAVE_TIMER_20261118.md).
+- Window page selection also granted explicit-retry permission after an unresolved save. Local RED **1 failed / 8 passed**, combined GREEN **9 new / 249 related / 5800 full passed, 3 skipped** including successful Linux CRLF simulation for all 9 new cases. The earlier Windows fixture failure was due to native newline representation. [Updated audit and commit evidence](../architecture/PC_CQ_R42_FOCUSED_SAVE_TIMER_20261118.md).
 - The previous exact HEAD `4807599d9362896ba243175b2bc3fe90b6b9b2a1` passed [six matrix jobs and both Risk jobs](https://github.com/chigre/PictureCapture/actions/runs/44154305986), [three OCR jobs](https://github.com/chigre/PictureCapture/actions/runs/44154306194), and [CodeQL Python and Actions](https://github.com/chigre/PictureCapture/actions/runs/44154301972). Documentation architecture was skipped.
 - **Next action.** Resolve live main and sole Draft PR #663, then verify the new checkpoint HEAD’s six OS/Python jobs, Risk tier and Risk-tier CI gate, OCR three OS, and CodeQL Python/Actions. Read any failure log first. When green, test whether the ordinary ReviewWindow save-retry path can acknowledge a human edit after a failed write and editor rebind. Continue synthetic R5–R7 according to the existing queue.
-- The 7 new cases exercised real Tcl variables and synthetic PDIC readback. Local native GUI smoke was unavailable. Windows E3, #483 W1–W11, #503 Undo/Redo, real project scan/save/reopen, R6 real labels and R8 real scans are **NOT PERFORMED / DEFERRED**.
+- The 9 new cases exercised real Tcl variables and synthetic PDIC readback. Local native GUI smoke was unavailable. Windows E3, #483 W1–W11, #503 Undo/Redo, real project scan/save/reopen, R6 real labels and R8 real scans are **NOT PERFORMED / DEFERRED**.
 
 ## 2026-11-16 — R4.2 row-height crop callback image owner
 
