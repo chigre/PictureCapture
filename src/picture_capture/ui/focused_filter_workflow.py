@@ -2057,15 +2057,6 @@ def _flush_focused_changes(self, deps: FocusedFilterDeps) -> None:
             return
         self._filter_save_running = False
         self._filter_close_after_save = False
-        # A later debounce created while the writer was active must not
-        # silently retry an UNCERTAIN page. Explicit close/navigation may retry.
-        pending_job = getattr(self, "_filter_save_job", None)
-        if pending_job is not None:
-            try:
-                self.after_cancel(pending_job)
-            except Exception:
-                pass
-            self._filter_save_job = None
         prior_uncertain = set(
             getattr(self, "_filter_save_uncertain_pages", set())
         )
@@ -2124,6 +2115,15 @@ def _flush_focused_changes(self, deps: FocusedFilterDeps) -> None:
         if terminal_seen[0]:
             return
         terminal_seen[0] = True
+        # Retire the edit debounce before reconciliation can reschedule it
+        # or a conflict dialog can dispatch it through Tk's event loop.
+        pending_job = getattr(self, "_filter_save_job", None)
+        if pending_job is not None:
+            try:
+                self.after_cancel(pending_job)
+            except Exception:
+                pass
+            self._filter_save_job = None
         if kind == "done":
             done(payload)
         else:
