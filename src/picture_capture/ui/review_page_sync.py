@@ -35,6 +35,12 @@ def save_review_before_page_change(app: Any, index: int, *, already_saved: bool 
     if review is None or already_saved or page is None:
         return False
     if getattr(review, "_filter_rows_active", False):
+        if (
+            getattr(review, "_filter_save_uncertain_pages", None)
+            or getattr(review, "_filter_save_launch_failed", False)
+        ):
+            app.status_var.set("筛选校对保存状态未确认；请核对 PDIC 后显式重试，再切换页面。")
+            return None
         # Filtered rows span multiple pages, so a rendered-page-stem check
         # cannot prove that their background save has finished. Explicitly
         # fence a pending/running filtered save before changing main pages.
