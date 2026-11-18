@@ -111,7 +111,13 @@ def _has_unreported_simplified_input(self) -> bool:
 def autosave_commit(self, deps: ReviewPageDeps) -> bool:
     """Commit review edits for the shared main-window autosave timer."""
     if getattr(self, "_filter_rows_active", False):
-        self._flush_focused_changes_now()
+        # This periodic timer cannot authorize replay of a write whose
+        # launch or disk outcome must be checked before an explicit retry.
+        if not (
+            getattr(self, "_filter_save_uncertain_pages", None)
+            or getattr(self, "_filter_save_launch_failed", False)
+        ):
+            self._flush_focused_changes_now()
         # A clean filtered-review view has no PDIC write to acknowledge.
         # Return False so the shared main autosave timer can persist any
         # independently edited main-canvas text. Previously this always
