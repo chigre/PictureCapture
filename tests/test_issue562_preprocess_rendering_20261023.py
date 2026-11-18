@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import ast
 from dataclasses import replace
+import os
 from pathlib import Path
 import pickle
 import subprocess
@@ -149,6 +150,59 @@ def test_uvdoc_crop_bounds_follow_the_actual_corrected_image(tmp_path, monkeypat
     assert reopened is not None and reopened.crop_box == accepted.crop_box
     monkeypatch.setattr(api, "unwarp_document_image", lambda _image: Image.new("RGB", (50, 60), "white"))
     assert api.processed_image(source, reopened).size == (46, 50)
+
+
+def test_analysis_uses_the_metadata_of_the_image_it_decoded(tmp_path, monkeypatch, source, analysis):
+    page = tmp_path / "scan.png"
+    source.save(page)
+    monkeypatch.setattr(api, "analyze_preprocess_page", lambda *_args, **_kwargs: replace(analysis))
+
+    result = api.analyze_preprocess_path(page, object())
+
+    assert result.source_size_bytes == page.stat().st_size
+    assert result.source_mtime_ns == page.stat().st_mtime_ns
+
+
+def test_analysis_refuses_a_source_changed_during_processing(tmp_path, monkeypatch, source, analysis):
+    page = tmp_path / "scan.png"
+    source.save(page)
+    before = page.stat()
+
+    def analyze(opened, *_args, **_kwargs):
+        opened.load()
+        os.utime(page, ns=(before.st_atime_ns, before.st_mtime_ns - 2_000_000_000))
+        return replace(analysis)
+
+    monkeypatch.setattr(api, "analyze_preprocess_page", analyze)
+    with pytest.raises(OSError, match="源图已变化"):
+        api.analyze_preprocess_path(page, object())
+
+
+def test_analysis_refuses_a_same_size_replacement_before_accepting_metadata(
+    tmp_path, monkeypatch, source, analysis,
+):
+    page = tmp_path / "scan.bmp"
+    replacement = tmp_path / "replacement.bmp"
+    source.save(page)
+    with Image.new("RGB", source.size, "blue") as alternate:
+        alternate.save(replacement)
+    before = page.stat()
+    assert replacement.stat().st_size == before.st_size
+    os.utime(replacement, ns=(before.st_atime_ns, before.st_mtime_ns))
+    real_open = Path.open
+    source_opens = []
+
+    def open_with_replacement(path, mode="r", *args, **kwargs):
+        if path == page and mode == "rb":
+            if source_opens:
+                replacement.replace(page)
+            source_opens.append(path)
+        return real_open(path, mode, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "open", open_with_replacement)
+    monkeypatch.setattr(api, "analyze_preprocess_page", lambda *_args, **_kwargs: replace(analysis))
+    with pytest.raises(OSError, match="源图已变化"):
+        api.analyze_preprocess_path(page, object())
 
 
 @pytest.mark.parametrize("size,requested,expected", [((80, 100), 10, (80, 100)),

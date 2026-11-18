@@ -105,6 +105,7 @@ from .canvas import (
 from .persistence import (
     MANUAL_GEOMETRY_FORMAT,
     MANUAL_GEOMETRY_VERSION,
+    analyze_source_path as _analyze_source_path,
     clear_manual_perspective_quad,
     load_analysis,
     load_manual_perspective_quad,
@@ -1039,23 +1040,11 @@ def analyze_preprocess_path(
     geometry_mode: str = "auto",
     manual_perspective_quad: tuple[float, ...] | None = None,
 ) -> PreprocessAnalysis:
-    path = Path(path)
-    with Image.open(path) as opened:
-        analysis = analyze_preprocess_page(
-            opened,
-            settings,
-            safety_margin_px=safety_margin_px,
-            auto_deskew=auto_deskew,
-            geometry_mode=geometry_mode,
-            manual_perspective_quad=manual_perspective_quad,
-        )
-    try:
-        stat = path.stat()
-        analysis.source_size_bytes = int(stat.st_size)
-        analysis.source_mtime_ns = int(stat.st_mtime_ns)
-    except OSError:
-        pass
-    return analysis
+    return _analyze_source_path(
+        path, settings, analyzer=analyze_preprocess_page,
+        safety_margin_px=safety_margin_px, auto_deskew=auto_deskew,
+        geometry_mode=geometry_mode, manual_perspective_quad=manual_perspective_quad,
+    )
 
 
 def analysis_is_current(

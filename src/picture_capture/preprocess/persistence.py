@@ -1,14 +1,39 @@
 from __future__ import annotations
 
-"""Persistence helpers for image preprocessing analysis and manual geometry."""
+"""Source-file and sidecar I/O for image preprocessing and manual geometry."""
 
 import json
 import math
 from pathlib import Path
-from typing import Iterable
+from typing import Callable, Iterable
+
+from PIL import Image
 
 from ..persistence.project_storage import image_preprocess_data_root
+from ..runtime.source_file_stamp import source_file_stamp
 from .models import PreprocessAnalysis
+
+
+def analyze_source_path(
+    path: Path, settings, *, analyzer: Callable[..., PreprocessAnalysis], **options,
+) -> PreprocessAnalysis:
+    """Bind the saved metadata to the image bytes read for this analysis."""
+    path = Path(path)
+    with path.open("rb") as source:
+        original_stamp = source_file_stamp(source)
+        with Image.open(source) as opened:
+            analysis = analyzer(opened, settings, **options)
+        if source_file_stamp(source) != original_stamp:
+            raise OSError("预处理期间源图已变化，请重新分析")
+    # Reopening after releasing the old handle detects a replacement of the
+    # path even when that old file's open handle recorded no change.
+    with path.open("rb") as current:
+        if source_file_stamp(current) != original_stamp:
+            raise OSError("预处理期间源图已变化，请重新分析")
+    _, _, size_bytes, mtime_ns, _ = original_stamp
+    analysis.source_size_bytes = size_bytes
+    analysis.source_mtime_ns = mtime_ns
+    return analysis
 
 
 def result_path(project_root: Path, page: Path) -> Path:
