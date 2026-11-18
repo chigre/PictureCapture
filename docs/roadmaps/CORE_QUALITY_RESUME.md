@@ -1,3 +1,10 @@
+## 2026-11-18 — R3 ordinary ReviewWindow retry and rollback ownership
+
+- Explicit Save now verifies both editor columns before claiming or saving a page and refuses an unresolved prior write. Error recovery revalidates exact PDIC and simplified bytes, the journal and both editor columns before restoring memory. Verified pre-publication failure remains retryable after a complete rebind.
+- Local RED **9 failed / 44 passed** on the previous source. Combined local Python 3.12 GREEN **9 new / 358 related / 5809 full passed, 3 skipped**. Tcl rebind tests reopened the synthetic PDIC and simplified sidecar. Architecture guard, change guard and F821 passed. [Audit and evidence](../architecture/PC_CQ_R3_ORDINARY_REVIEW_RETRY_20261118.md).
+- **Next action.** Verify the live #663 HEAD's six OS/Python jobs, both Risk jobs, three OCR jobs and both CodeQL jobs. Read failure logs first. After GREEN take the next eligible synthetic R7.3 coordinate contract case across source, canonical and transformed frames. The roadmap tracks the R5 synthetic baseline, the prerequisite for R6 learning, and representative profiling for R7.1/R7.2.
+- Windows operator E3, #483 W1–W11, #503 Undo/Redo, real project scan/save/reopen, R6 labels and R8 scans remain **NOT PERFORMED / DEFERRED**.
+
 ## 2026-11-18 — R4.2 focused save debounce, periodic retry and page navigation
 
 - Two local RED→GREEN work packages addressed in-flight edit timers surviving terminal save callbacks and periodic autosave granting explicit-retry permission to unresolved focused writes. RED counts were **2 failed / 2 passed** and **2 failed / 5 passed**. Combined local Python 3.12 GREEN **7 new / 240 related / 5798 full passed, 3 skipped**. Architecture guard, change guard and F821 passed. [Architecture audit and commit evidence](../architecture/PC_CQ_R42_FOCUSED_SAVE_TIMER_20261118.md).
