@@ -505,3 +505,89 @@ def test_real_r3_conflicting_windows_refuse_and_preserve_both_inputs(tmp_path):
     assert widget.get() == "主界面不同版本"
     assert pdic_path(page).read_bytes() == before
     assert not _recovery_path(page).exists()
+
+
+def _lifecycle_widget_case(tmp_path):
+    import tkinter as tk
+    from picture_capture.proofreading.main_editor_sync import commit_proofread_entries
+    from picture_capture.proofreading.simplified_review import entry_key
+    from picture_capture.ui import review_simplified_workflow
+
+    page, entry, review = case(tmp_path)
+    app = review.parent
+    app._foreground_batch_state = lambda _index: "idle"
+    app.settings.to_json = lambda _path: None
+    review._review_evidence_before_save = lambda: None
+    review._review_evidence_after_save = lambda _evidence: None
+    review._stored_review_zoom_percent = lambda: 100
+    simplified_deps = SimpleNamespace(simplified_entry_key=entry_key)
+    review._capture_simplified_edits = lambda stem: review_simplified_workflow._capture_simplified_edits(
+        review, simplified_deps, stem,
+    )
+    review._simplified_display_from_value = lambda original, actual, manual: actual or original
+    review._commit_edits = lambda: commit_proofread_entries(review)
+    review.row_entries = [entry]
+    review._bound_row_entries = lambda: list(review.row_entries)
+    tcl = tk.Tcl()
+    review.vars = [tk.StringVar(master=tcl, value="new")]
+    review.simplified_vars = [tk.StringVar(master=tcl, value="manual")]
+    deps = SimpleNamespace(settings_path=lambda root: root / "synthetic-settings.json")
+    return page, entry, review, tcl, deps
+
+
+def test_verified_prepublication_failure_can_retry_after_tk_rebind(tmp_path, monkeypatch):
+    import tkinter as tk
+    from picture_capture.io.formats import read_pdic
+    from picture_capture.proofreading.simplified_review import read_records
+    from picture_capture.ui import review_page_lifecycle
+
+    page, entry, review, tcl, deps = _lifecycle_widget_case(tmp_path)
+    app = review.parent
+    old_pdic = pdic_path(page).read_bytes()
+    real_publish = bundle._publish
+
+    def refuse(_path, _data):
+        raise OSError("synthetic pre-publication write failure")
+
+    with monkeypatch.context() as failed_write:
+        failed_write.setattr(bundle, "_publish", refuse)
+        assert review_page_lifecycle.save(review, deps, redraw_main=False) is False
+    assert not getattr(app, "_deferred_save_uncertain", False)
+    assert getattr(review, "_r3_autosave_unconfirmed", False) is True
+    assert review.vars[0].get() == "new" and entry.word == "old"
+    assert pdic_path(page).read_bytes() == old_pdic
+    assert not _recovery_path(page).exists()
+
+    review.vars = [tk.StringVar(master=tcl, value="new")]
+    review.simplified_vars = [tk.StringVar(master=tcl, value="manual")]
+    assert bundle._publish is real_publish
+    assert review_page_lifecycle.save(review, deps, redraw_main=False) is True
+    assert review._r3_autosave_unconfirmed is False
+    assert [(row.word, row.x, row.y) for row in read_pdic(pdic_path(page))] == [("new", 10, 20)]
+    records = read_records(simplified_review_path_for_image(page))
+    assert records["10,20"]["source_word"] == "new"
+    assert records["10,20"]["text"] == "manual"
+    assert not _recovery_path(page).exists()
+
+
+def test_idle_save_refuses_until_simplified_editor_rebind_is_complete(tmp_path):
+    from picture_capture.io.formats import read_pdic
+    from picture_capture.proofreading.simplified_review import read_records
+    from picture_capture.ui import review_page_lifecycle
+
+    page, row, review, _tcl, deps = _lifecycle_widget_case(tmp_path)
+    review.simplified_vars[0].set("latest manual correction")
+    review.simplified_manual_flags.clear()
+    original = pdic_path(page).read_bytes()
+    sidecar = simplified_review_path_for_image(page)
+    assert review_page_lifecycle.save(review, deps, redraw_main=False) is False
+    assert getattr(review, "_r3_autosave_unconfirmed", False) is True
+    assert row.word == "old" and pdic_path(page).read_bytes() == original
+    assert not sidecar.exists()
+    assert review.simplified_vars[0].get() == "latest manual correction"
+
+    review.simplified_manual_flags[:] = [True]
+    assert review_page_lifecycle.save(review, deps, redraw_main=False) is True
+    assert not review._r3_autosave_unconfirmed
+    assert read_pdic(pdic_path(page))[0].word == "new"
+    assert read_records(sidecar)["10,20"]["text"] == "latest manual correction"

@@ -128,3 +128,44 @@ def test_review_failed_save_with_unchanged_widgets_still_rolls_back(tmp_path):
     assert review.simplified_manual_flags == [False]
     assert var.get() == "pending review word"
     assert not app.__dict__.get("_deferred_save_uncertain", False)
+
+
+@pytest.mark.parametrize("rebound", [False, True])
+def test_review_save_failure_preserves_simplified_editor_ownership(tmp_path, rebound):
+    page, entry, _, app, review, _ = _setup(tmp_path)
+    review.simplified_vars = [Var("original manual")]
+    before = pdic_path(page).read_bytes()
+    with pytest.raises(OSError, match="writer failure"):
+        with protect_review_pdic_commit(review):
+            entry.word = "attempted word"
+            if rebound:
+                review.simplified_vars = [Var("new simplified edit")]
+            else:
+                review.simplified_vars[0].set("new simplified edit")
+            review._simplified_page_cache["001"]["10,20"]["text"] = "new simplified edit"
+            review.simplified_manual_flags[0] = True
+            review.simplified_actual_values[0] = "new simplified edit"
+            raise OSError("writer failure")
+    assert review.simplified_vars[0].get() == "new simplified edit"
+    assert review._simplified_page_cache["001"]["10,20"]["text"] == "new simplified edit"
+    assert review.simplified_actual_values == ["new simplified edit"]
+    assert review.simplified_manual_flags == [True]
+    assert getattr(app, "_deferred_save_uncertain", False) is True
+    assert pdic_path(page).read_bytes() == before
+
+
+def test_review_save_failure_checks_simplified_disk_even_when_pdic_is_unchanged(tmp_path):
+    from picture_capture.persistence.project_storage import simplified_review_path_for_image
+
+    page, _, _, app, review, _ = _setup(tmp_path)
+    sidecar = simplified_review_path_for_image(page)
+    sidecar.parent.mkdir(parents=True, exist_ok=True)
+    sidecar.write_bytes(b"original simplified data")
+    pdic_before = pdic_path(page).read_bytes()
+    with pytest.raises(OSError, match="writer failure"):
+        with protect_review_pdic_commit(review):
+            sidecar.write_bytes(b"newer simplified data")
+            raise OSError("writer failure")
+    assert getattr(app, "_deferred_save_uncertain", False) is True
+    assert sidecar.read_bytes() == b"newer simplified data"
+    assert pdic_path(page).read_bytes() == pdic_before

@@ -92,3 +92,30 @@ def test_legacy_original_only_review_without_simplified_column_still_noop():
     review, deps, messages, navigation, claims = _case(with_simplified=False)
     assert lifecycle.save(review, deps, redraw_main=False) is True
     assert messages == [] and claims == []
+
+
+def test_pending_retry_refuses_original_editor_without_its_row():
+    review, deps, messages, navigation, claims = _case(complete=True)
+    review.row_entries.clear()
+    review.vars[0].text = "尚未保存的原词"
+    review._r3_autosave_unconfirmed = True
+
+    assert lifecycle.save(review, deps, redraw_main=False) is False
+    lifecycle.change_page(review, deps, 1)
+    assert review.vars[0].get() == "尚未保存的原词"
+    assert review._r3_autosave_unconfirmed is True
+    assert navigation == claims == []
+    assert any("原词" in msg and "绑定" in msg for msg in messages)
+
+
+def test_pending_retry_refuses_uncertain_write_even_with_complete_rebound_rows():
+    review, deps, messages, navigation, claims = _case(complete=True)
+    review.parent._deferred_save_uncertain = True
+    review.vars = [Value(review.row_entries[0].word)]
+
+    assert lifecycle.save(review, deps, redraw_main=False) is False
+    lifecycle.change_page(review, deps, 1)
+    assert review.vars[0].get() == "原词"
+    assert review._r3_autosave_unconfirmed is True
+    assert navigation == claims == []
+    assert any("先前" in msg and "未确认" in msg for msg in messages)
