@@ -236,25 +236,21 @@ def _orthogonal_step_payload(
 
 
 
+def _orthogonal_grid_dimension(value: object, name: str) -> int:
+    if isinstance(value, (bool, np.bool_)):
+        raise ValueError(f"{name} must be a non-negative integer")
+    try:
+        result = integer_index(value)
+    except (TypeError, ValueError, OverflowError) as exc:
+        raise ValueError(f"{name} must be a non-negative integer") from exc
+    if result < 0:
+        raise ValueError(f"{name} must be a non-negative integer")
+    return result
+
+
 def _orthogonal_estimate_from_step(
     payload: dict[str, object],
 ) -> tuple[OrthogonalWarpEstimate, float]:
-    def grid_dimension(name: str) -> int:
-        if name not in payload:
-            return 0
-        value = payload[name]
-        if isinstance(value, (bool, np.bool_)):
-            raise ValueError(f"{name} must be a non-negative integer")
-        try:
-            result = int(integer_index(value))
-        except (TypeError, ValueError, OverflowError) as exc:
-            raise ValueError(
-                f"{name} must be a non-negative integer"
-            ) from exc
-        if result < 0:
-            raise ValueError(f"{name} must be a non-negative integer")
-        return result
-
     if (
         "row_gain" in payload
         and isinstance(payload["row_gain"], (bool, np.bool_))
@@ -277,8 +273,8 @@ def _orthogonal_estimate_from_step(
             float(v) for v in payload.get("angle_knots_deg", ())
         ),
         x_knots=tuple(float(v) for v in payload.get("x_knots", ())),
-        row_grid_rows=grid_dimension("row_grid_rows"),
-        row_grid_cols=grid_dimension("row_grid_cols"),
+        row_grid_rows=_orthogonal_grid_dimension(payload.get("row_grid_rows", 0), "row_grid_rows"),
+        row_grid_cols=_orthogonal_grid_dimension(payload.get("row_grid_cols", 0), "row_grid_cols"),
         row_angle_grid_deg=tuple(
             float(v) for v in payload.get("row_angle_grid_deg", ())
         ),

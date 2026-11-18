@@ -25,7 +25,7 @@ from .orthogonal_dewarp import (
     inverse_transform_points_orthogonal,
     transform_points_orthogonal,
 )
-from .orthogonal_policy import _orthogonal_estimate_from_step
+from .orthogonal_policy import _orthogonal_estimate_from_step, _orthogonal_grid_dimension
 
 COORDINATE_MAPPING_CONTRACT_VERSION = 1
 
@@ -398,9 +398,12 @@ class PreprocessCoordinateMap:
         analysis = self._analysis
         if not analysis.orthogonal_applied:
             return ()
-        if analysis.orthogonal_steps:
+        saved_steps = analysis.orthogonal_steps
+        if not isinstance(saved_steps, (tuple, list)):
+            raise CoordinateMappingUnavailable("orthogonal replay steps must be a sequence of step records")
+        if saved_steps:
             steps: list[tuple[OrthogonalWarpEstimate, float]] = []
-            for payload in analysis.orthogonal_steps:
+            for payload in saved_steps:
                 if not isinstance(payload, dict):
                     raise CoordinateMappingUnavailable(
                         "orthogonal replay step is malformed"
@@ -419,13 +422,15 @@ class PreprocessCoordinateMap:
                 steps.append((estimate, float(row_gain)))
             return tuple(steps)
         if analysis.orthogonal_y_knots and analysis.orthogonal_angle_knots_deg:
+            if isinstance(analysis.orthogonal_row_gain, (bool, np.bool_)):
+                raise CoordinateMappingUnavailable("orthogonal replay legacy row gain must not be boolean")
             try:
                 estimate = OrthogonalWarpEstimate(
                     y_knots=tuple(analysis.orthogonal_y_knots),
                     angle_knots_deg=tuple(analysis.orthogonal_angle_knots_deg),
                     x_knots=tuple(analysis.orthogonal_x_knots),
-                    row_grid_rows=int(analysis.orthogonal_row_grid_rows),
-                    row_grid_cols=int(analysis.orthogonal_row_grid_cols),
+                    row_grid_rows=_orthogonal_grid_dimension(analysis.orthogonal_row_grid_rows, "row_grid_rows"),
+                    row_grid_cols=_orthogonal_grid_dimension(analysis.orthogonal_row_grid_cols, "row_grid_cols"),
                     row_angle_grid_deg=tuple(
                         analysis.orthogonal_row_angle_grid_deg
                     ),
