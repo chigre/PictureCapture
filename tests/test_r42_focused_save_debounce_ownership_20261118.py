@@ -1,6 +1,7 @@
 """Exercise focused save completion against in-flight Tcl text edits."""
 from __future__ import annotations
 
+import os
 import tkinter as tk
 from dataclasses import replace
 from types import SimpleNamespace
@@ -17,12 +18,17 @@ from picture_capture.ui import focused_filter_workflow as flow
 from picture_capture.ui import main_pdic_persistence, review_page_lifecycle
 
 
+def _pdic_bytes(word):
+    # PDIC text is written with the platform-native line ending.
+    return f"{word}#3#4#37.5#50#001#@#@{os.linesep}".encode("utf-8")
+
+
 @pytest.fixture
 def focused_save(tmp_path):
     page = tmp_path / "001.bmp"
     Image.new("RGB", (8, 8), "white").save(page)
     pdic = pdic_path_for_image(page)
-    pdic.write_bytes(b"before#3#4#37.5#50#001#@#@\n")
+    pdic.write_bytes(_pdic_bytes("before"))
     target = {
         "page_index": 0, "x": 3, "y": 4,
         "original_word": "before", "current_word": "before",
@@ -103,7 +109,7 @@ def test_success_replaces_pending_debounce_and_saves_latest_text(focused_save):
     case.word.set("latest")
     old_timer = case.review._filter_save_job
     result = worker()
-    assert case.pdic.read_bytes() == b"first#3#4#37.5#50#001#@#@\n"
+    assert case.pdic.read_bytes() == _pdic_bytes("first")
     done(result)
 
     pending = case.review._filter_pending_changes[0][(3, 4)]
@@ -114,7 +120,7 @@ def test_success_replaces_pending_debounce_and_saves_latest_text(focused_save):
     worker, done = case.dispatches[1]
     done(worker())
 
-    assert case.pdic.read_bytes() == b"latest#3#4#37.5#50#001#@#@\n"
+    assert case.pdic.read_bytes() == _pdic_bytes("latest")
     assert case.writes == [(("before", "first"),), (("first", "latest"),)]
     assert case.target["original_word"] == case.word.get() == "latest"
     assert case.warnings == []
@@ -129,7 +135,7 @@ def test_pdic_conflict_cancels_inflight_edit_debounce(focused_save):
     worker, done = case.dispatches[0]
     case.word.set("latest")
 
-    foreign_bytes = b"foreign#3#4#37.5#50#001#@#@\n"
+    foreign_bytes = _pdic_bytes("foreign")
     case.pdic.write_bytes(foreign_bytes)
     done(worker())
 
@@ -159,7 +165,7 @@ def test_expired_debounce_is_rearmed_after_inflight_save(focused_save):
     case.fire_next_timer()
     worker, done = case.dispatches[1]
     done(worker())
-    assert case.pdic.read_bytes() == b"latest#3#4#37.5#50#001#@#@\n"
+    assert case.pdic.read_bytes() == _pdic_bytes("latest")
     assert not case.timers and not case.review._filter_pending_changes
     assert case.warnings == []
 
@@ -217,7 +223,7 @@ def test_shared_autosave_cannot_replay_an_unconfirmed_focused_save(focused_save,
         with pytest.raises(OSError, match="synthetic post-publication failure") as error:
             case.dispatches[0][0]()
         case.failures[0](error.value, "synthetic error details")
-        expected_bytes = b"first#3#4#37.5#50#001#@#@\n"
+        expected_bytes = _pdic_bytes("first")
 
     assert case.pdic.read_bytes() == expected_bytes
     assert case.review._filter_save_uncertain_pages == {0}
@@ -237,7 +243,7 @@ def test_shared_autosave_cannot_replay_an_unconfirmed_focused_save(focused_save,
         assert len(case.dispatches) == attempt_count + 1
         work, complete = case.dispatches[-1]
         complete(work())
-        assert case.pdic.read_bytes() == b"first#3#4#37.5#50#001#@#@\n"
+        assert case.pdic.read_bytes() == _pdic_bytes("first")
         assert not case.review._filter_save_uncertain_pages
         assert not case.review._filter_pending_changes
 
@@ -249,5 +255,5 @@ def test_shared_autosave_still_flushes_ordinary_pending_focused_edit(focused_sav
     assert len(case.dispatches) == 1
     worker, done = case.dispatches[0]
     done(worker())
-    assert case.pdic.read_bytes() == b"first#3#4#37.5#50#001#@#@\n"
+    assert case.pdic.read_bytes() == _pdic_bytes("first")
     assert not case.review._filter_pending_changes and not case.timers
