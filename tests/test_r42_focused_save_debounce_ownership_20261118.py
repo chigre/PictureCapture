@@ -257,3 +257,32 @@ def test_shared_autosave_still_flushes_ordinary_pending_focused_edit(focused_sav
     done(worker())
     assert case.pdic.read_bytes() == _pdic_bytes("first")
     assert not case.review._filter_pending_changes and not case.timers
+
+
+@pytest.mark.parametrize("uncertain", [False, True])
+def test_main_page_navigation_only_flushes_a_confirmed_pending_queue(focused_save, uncertain):
+    from picture_capture.ui.review_page_sync import save_review_before_page_change
+
+    case = focused_save
+    app = case.review.parent
+    app.current_page = app.project.images[0]
+    app.project.images.append(app.current_page.with_name("002.bmp"))
+    app.review_window = case.review
+    case.review.save = lambda **kwargs: review_page_lifecycle.save(case.review, None, **kwargs)
+    dispatch = app._start_ui_worker
+    initial_bytes = case.pdic.read_bytes()
+    case.word.set("first")
+    if uncertain:
+        app._start_ui_worker = lambda *_args, **_kwargs: -1
+        case.fire_next_timer()
+        app._start_ui_worker = dispatch
+        assert case.review._filter_save_uncertain_pages == {0}
+
+    assert save_review_before_page_change(app, 1) is None
+    assert len(case.dispatches) == (0 if uncertain else 1)
+    assert case.pdic.read_bytes() == initial_bytes
+    assert app.current_page == app.project.images[0]
+    if uncertain:
+        assert case.review._filter_pending_changes[0][(3, 4)]["new_word"] == "first"
+        assert case.word.get() == "first"
+        assert "核对" in case.status.get()
