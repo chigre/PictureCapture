@@ -8,6 +8,7 @@ from typing import Callable
 from PIL import Image, ImageDraw
 
 from .models import OutputCanvasInfo, PreprocessAnalysis
+from .raster_bounds import validated_crop_box
 
 PREVIEW_YELLOW = (255, 225, 110, 94)
 PREVIEW_OUTLINE = (218, 164, 24, 255)
@@ -47,12 +48,12 @@ def review_image(
     image: Image.Image, analysis: PreprocessAnalysis, *, geometry_renderer: Callable, overlay_renderer: Callable
 ) -> Image.Image:
     corrected = geometry_renderer(image, analysis)
-    return overlay_renderer(corrected, analysis.crop_box)
+    return overlay_renderer(corrected, validated_crop_box(analysis.crop_box, corrected.size))
 
 
 def processed_image(image: Image.Image, analysis: PreprocessAnalysis, *, geometry_renderer: Callable) -> Image.Image:
     corrected = geometry_renderer(image, analysis)
-    return corrected.crop(analysis.crop_box)
+    return corrected.crop(validated_crop_box(analysis.crop_box, corrected.size))
 
 
 def processed_image_with_canvas(

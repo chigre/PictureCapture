@@ -248,51 +248,58 @@ def _orthogonal_grid_dimension(value: object, name: str) -> int:
     return result
 
 
+def _orthogonal_finite_number(value: object, name: str) -> float:
+    if isinstance(value, (bool, np.bool_)):
+        raise ValueError(f"{name} must not be boolean")
+    try:
+        result = float(value)
+    except (TypeError, ValueError, OverflowError) as exc:
+        raise ValueError(f"{name} must be numeric") from exc
+    if not math.isfinite(result):
+        raise ValueError(f"{name} must be finite")
+    return result
+
+
+def _orthogonal_values(value: object, name: str) -> tuple[float, ...]:
+    if not isinstance(value, (list, tuple)):
+        raise ValueError(f"{name} must be a sequence of numbers")
+    return tuple(_orthogonal_finite_number(item, name) for item in value)
+
+
+def _orthogonal_geometry_from_step(payload: dict[str, object]) -> OrthogonalWarpEstimate:
+    reference_x = payload.get("reference_x")
+    return OrthogonalWarpEstimate(
+        y_knots=_orthogonal_values(payload.get("y_knots", ()), "y_knots"),
+        angle_knots_deg=_orthogonal_values(payload.get("angle_knots_deg", ()), "angle_knots_deg"),
+        x_knots=_orthogonal_values(payload.get("x_knots", ()), "x_knots"),
+        row_grid_rows=_orthogonal_grid_dimension(payload.get("row_grid_rows", 0), "row_grid_rows"),
+        row_grid_cols=_orthogonal_grid_dimension(payload.get("row_grid_cols", 0), "row_grid_cols"),
+        row_angle_grid_deg=_orthogonal_values(payload.get("row_angle_grid_deg", ()), "row_angle_grid_deg"),
+        row_displacement_grid_px=_orthogonal_values(
+            payload.get("row_displacement_grid_px", ()), "row_displacement_grid_px",
+        ),
+        separator_y_knots=_orthogonal_values(payload.get("separator_y_knots", ()), "separator_y_knots"),
+        separator_shift_knots_px=_orthogonal_values(
+            payload.get("separator_shift_knots_px", ()), "separator_shift_knots_px",
+        ),
+        reference_x=_orthogonal_finite_number(
+            0.0 if reference_x is None else reference_x, "reference_x",
+        ),
+        active=True,
+    )
+
+
 def _orthogonal_estimate_from_step(
     payload: dict[str, object],
 ) -> tuple[OrthogonalWarpEstimate, float]:
-    if (
-        "row_gain" in payload
-        and isinstance(payload["row_gain"], (bool, np.bool_))
-    ):
-        raise ValueError("row_gain must not be boolean")
-    try:
-        # Preserve established replay compatibility: absent, null and zero
-        # values use the historical default gain; negative values clamp to 0.
-        row_gain = max(
-            0.0,
-            float(payload.get("row_gain", 1.0) or 1.0),
-        )
-    except (TypeError, ValueError, OverflowError) as exc:
-        raise ValueError("row_gain must be numeric") from exc
-
-
-    estimate = OrthogonalWarpEstimate(
-        y_knots=tuple(float(v) for v in payload.get("y_knots", ())),
-        angle_knots_deg=tuple(
-            float(v) for v in payload.get("angle_knots_deg", ())
-        ),
-        x_knots=tuple(float(v) for v in payload.get("x_knots", ())),
-        row_grid_rows=_orthogonal_grid_dimension(payload.get("row_grid_rows", 0), "row_grid_rows"),
-        row_grid_cols=_orthogonal_grid_dimension(payload.get("row_grid_cols", 0), "row_grid_cols"),
-        row_angle_grid_deg=tuple(
-            float(v) for v in payload.get("row_angle_grid_deg", ())
-        ),
-        row_displacement_grid_px=tuple(
-            float(v)
-            for v in payload.get("row_displacement_grid_px", ())
-        ),
-        separator_y_knots=tuple(
-            float(v) for v in payload.get("separator_y_knots", ())
-        ),
-        separator_shift_knots_px=tuple(
-            float(v) for v in payload.get("separator_shift_knots_px", ())
-        ),
-        reference_x=float(payload.get("reference_x", 0.0) or 0.0),
-        active=True,
+    saved_gain = payload.get("row_gain")
+    # Historical modern steps use the default for null or numeric zero.
+    row_gain = _orthogonal_finite_number(
+        1.0 if saved_gain is None else saved_gain, "row_gain",
     )
-    return estimate, row_gain
-
+    if not saved_gain:
+        row_gain = 1.0
+    return _orthogonal_geometry_from_step(payload), max(0.0, row_gain)
 
 
 # Preserve the historical callable pickle paths, as with preprocess.canvas.

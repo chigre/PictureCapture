@@ -117,6 +117,40 @@ def test_export_reopens_in_original_coordinates(tmp_path, source, analysis, suff
         assert original.tobytes() == source.tobytes()
 
 
+@pytest.mark.parametrize("box", [
+    (4.5, 6, 34, 56), (False, 6, 34, 56), (-1, 6, 34, 56),
+    (4, 6, 41, 56), (4, 6, 34, 61), (4, 6, 4, 56),
+])
+def test_bad_reviewed_crop_cannot_reopen_or_replace_existing_export(tmp_path, source, analysis, box):
+    page = tmp_path / "scan.png"
+    source.save(page)
+    malformed = replace(analysis, crop_box=box)
+    cache = api.save_analysis(tmp_path, page, malformed)
+    cached_bytes = cache.read_bytes()
+    assert api.load_analysis(tmp_path, page) is None
+    assert cache.read_bytes() == cached_bytes
+
+    destination = tmp_path / "output.png"
+    original = page.read_bytes()
+    destination.write_bytes(original)
+    with pytest.raises(ValueError, match="crop_box"):
+        api.save_processed_page(page, malformed, destination)
+    with pytest.raises(ValueError, match="crop_box"):
+        api.save_review_preview(page, malformed, destination)
+    assert page.read_bytes() == destination.read_bytes() == original
+
+
+def test_uvdoc_crop_bounds_follow_the_actual_corrected_image(tmp_path, monkeypatch, source, analysis):
+    page = tmp_path / "scan.png"
+    source.save(page)
+    accepted = replace(analysis, geometry_mode="uvdoc", crop_box=(4, 6, 50, 56))
+    api.save_analysis(tmp_path, page, accepted)
+    reopened = api.load_analysis(tmp_path, page)
+    assert reopened is not None and reopened.crop_box == accepted.crop_box
+    monkeypatch.setattr(api, "unwarp_document_image", lambda _image: Image.new("RGB", (50, 60), "white"))
+    assert api.processed_image(source, reopened).size == (46, 50)
+
+
 @pytest.mark.parametrize("size,requested,expected", [((80, 100), 10, (80, 100)),
     ((400, 800), 10, (160, 320)), ((400, 800), 600, (300, 600))])
 def test_preview_size_floor_and_jpeg_policy(tmp_path, monkeypatch, analysis, size, requested, expected):

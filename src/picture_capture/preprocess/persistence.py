@@ -37,7 +37,7 @@ def load_analysis(project_root: Path, page: Path) -> PreprocessAnalysis | None:
     try:
         payload = json.loads(path.read_text(encoding="utf-8"))
         return PreprocessAnalysis.from_dict(payload)
-    except (OSError, ValueError, TypeError, json.JSONDecodeError):
+    except (OSError, ValueError, TypeError, OverflowError):
         return None
 
 

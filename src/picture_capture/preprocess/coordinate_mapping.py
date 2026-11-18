@@ -25,7 +25,8 @@ from .orthogonal_dewarp import (
     inverse_transform_points_orthogonal,
     transform_points_orthogonal,
 )
-from .orthogonal_policy import _orthogonal_estimate_from_step, _orthogonal_grid_dimension
+from .raster_bounds import validated_crop_box, validated_raster_box, validated_raster_size
+from .replay import orthogonal_replay_steps
 
 COORDINATE_MAPPING_CONTRACT_VERSION = 1
 
@@ -37,44 +38,6 @@ _ORTHOGONAL_POLYGON_SAMPLE_SPACING_PX = 8.0
 _ORTHOGONAL_POLYGON_MAX_EDGE_STEPS = 8192
 _ORTHOGONAL_POLYGON_MAX_TOTAL_SAMPLES = 32768
 _ORTHOGONAL_EXCLUSIVE_BOUNDARY_EPSILON_PX = 1e-7
-
-
-def _validated_size_pair(value: Sequence[int], name: str) -> tuple[int, int]:
-    """Return a strict positive integer (width, height) snapshot."""
-    try:
-        if isinstance(value, (str, bytes)) or len(value) != 2:
-            raise ValueError
-        items = tuple(value)
-        if any(isinstance(item, bool) for item in items):
-            raise ValueError
-        dimensions = tuple(integer_index(item) for item in items)
-    except (TypeError, ValueError, OverflowError) as exc:
-        raise ValueError(
-            f"{name} must contain exactly two positive integer dimensions"
-        ) from exc
-    if any(dimension <= 0 for dimension in dimensions):
-        raise ValueError(
-            f"{name} must contain exactly two positive integer dimensions"
-        )
-    return int(dimensions[0]), int(dimensions[1])
-
-
-def _validated_box(
-    value: Sequence[int], name: str,
-) -> tuple[int, int, int, int]:
-    """Return a strict integer half-open box without lossy int() coercion."""
-    try:
-        if isinstance(value, (str, bytes)) or len(value) != 4:
-            raise ValueError
-        items = tuple(value)
-        if any(isinstance(item, bool) for item in items):
-            raise ValueError
-        coordinates = tuple(integer_index(item) for item in items)
-    except (TypeError, ValueError, OverflowError) as exc:
-        raise ValueError(
-            f"{name} must contain exactly four integer half-open coordinates"
-        ) from exc
-    return tuple(int(item) for item in coordinates)
 
 
 class CoordinateMappingUnavailable(ValueError):
@@ -129,16 +92,11 @@ class PreprocessCoordinateMap:
         exif_orientation: int = 1,
     ) -> None:
         snapshot = deepcopy(analysis)
-        if not isinstance(snapshot.orthogonal_applied, (bool, np.bool_)):
-            raise CoordinateMappingUnavailable(
-                "orthogonal_applied flag must be boolean"
-            )
-        snapshot.orthogonal_applied = bool(snapshot.orthogonal_applied)
         raw_dimensions = (
             (snapshot.source_width, snapshot.source_height)
             if source_size is None else source_size
         )
-        size = _validated_size_pair(raw_dimensions, "source_size")
+        size = validated_raster_size(raw_dimensions, "source_size")
         try:
             if isinstance(exif_orientation, bool):
                 raise TypeError
@@ -149,7 +107,7 @@ class PreprocessCoordinateMap:
             raise ValueError("exif_orientation must be an integer from 1 through 8")
         raw_size = (
             None if raw_source_size is None
-            else _validated_size_pair(raw_source_size, "raw_source_size")
+            else validated_raster_size(raw_source_size, "raw_source_size")
         )
         if raw_size is None and orientation != 1:
             raise ValueError(
@@ -179,11 +137,11 @@ class PreprocessCoordinateMap:
                 enabled=bool(canvas_snapshot.enabled),
             )
             if canvas_snapshot.enabled:
-                canvas_size = _validated_size_pair(
+                canvas_size = validated_raster_size(
                     (canvas_snapshot.width, canvas_snapshot.height),
                     "canvas dimensions",
                 )
-                canvas_box = _validated_box(
+                canvas_box = validated_raster_box(
                     canvas_snapshot.content_box, "canvas content_box",
                 )
                 canvas_snapshot = replace(
@@ -203,9 +161,9 @@ class PreprocessCoordinateMap:
             self, "analysis_is_canonicalized", bool(analysis_is_canonicalized),
         )
         self._validate()
-        object.__setattr__(
-            self, "_orthogonal_step_cache", self._build_orthogonal_steps(),
-        )
+        orthogonal_steps = self._build_orthogonal_steps()
+        snapshot.orthogonal_applied = bool(snapshot.orthogonal_applied)
+        object.__setattr__(self, "_orthogonal_step_cache", orthogonal_steps)
 
     @property
     def contract_version(self) -> int:
@@ -222,7 +180,7 @@ class PreprocessCoordinateMap:
         if not isinstance(self.layout_transform, LayoutTransform):
             raise CoordinateMappingUnavailable("layout transform snapshot is malformed")
         canonical_size = self.layout_transform.canonical_size(self.source_size)
-        analysis_size = _validated_size_pair(
+        analysis_size = validated_raster_size(
             (analysis.source_width, analysis.source_height),
             "analysis source dimensions",
         )
@@ -243,15 +201,7 @@ class PreprocessCoordinateMap:
                 "UVDoc uses a nonlinear unwarp without a supported point-map contract"
             )
 
-        x0, y0, x1, y1 = _validated_box(
-            analysis.crop_box,
-            "crop_box",
-        )
-        if (
-            x0 < 0 or y0 < 0 or x1 <= x0 or y1 <= y0
-            or x1 > analysis_size[0] or y1 > analysis_size[1]
-        ):
-            raise ValueError("crop_box is not valid in the transformed image frame")
+        x0, y0, x1, y1 = validated_crop_box(analysis.crop_box, analysis_size)
 
         if self.canvas is not None and self.canvas.enabled:
             cx0, cy0, cx1, cy1 = self.canvas.content_box
@@ -292,174 +242,15 @@ class PreprocessCoordinateMap:
                     "perspective inverse cannot be normalized for raster replay"
                 )
 
-    @staticmethod
-    def _validate_orthogonal_replay_estimate(
-        estimate: OrthogonalWarpEstimate,
-    ) -> None:
-        """Reject applied orthogonal stages whose saved geometry cannot replay."""
-        def finite(values: Sequence[float]) -> bool:
-            return all(math.isfinite(float(value)) for value in values)
-
-        def increasing(values: Sequence[float]) -> bool:
-            return all(
-                float(right) > float(left)
-                for left, right in zip(values, values[1:])
-            )
-
-        y_knots = estimate.y_knots
-        angle_knots = estimate.angle_knots_deg
-        x_knots = estimate.x_knots
-        separator_y = estimate.separator_y_knots
-        separator_shift = estimate.separator_shift_knots_px
-        row_angles = estimate.row_angle_grid_deg
-        row_displacements = estimate.row_displacement_grid_px
-
-        if bool(separator_y) != bool(separator_shift) or (
-            separator_y and len(separator_y) != len(separator_shift)
-        ):
-            raise CoordinateMappingUnavailable(
-                "orthogonal replay separator geometry is incomplete"
-            )
-        if separator_y and (
-            not finite(separator_y)
-            or not finite(separator_shift)
-            or not increasing(separator_y)
-        ):
-            raise CoordinateMappingUnavailable(
-                "orthogonal replay separator geometry is invalid"
-            )
-
-        has_row_grid = bool(row_angles or row_displacements)
-        if has_row_grid:
-            rows = int(estimate.row_grid_rows)
-            cols = int(estimate.row_grid_cols)
-            if (
-                rows < 2 or cols < 2
-                or len(y_knots) != rows
-                or len(x_knots) != cols
-                or not finite(y_knots)
-                or not finite(x_knots)
-                or not increasing(y_knots)
-                or not increasing(x_knots)
-                or (row_angles and len(row_angles) != rows * cols)
-                or (
-                    row_displacements
-                    and len(row_displacements) != rows * cols
-                )
-                or not finite(row_angles)
-                or not finite(row_displacements)
-            ):
-                raise CoordinateMappingUnavailable(
-                    "orthogonal replay row-grid geometry is invalid"
-                )
-            has_row_geometry = True
-        else:
-            if bool(y_knots) != bool(angle_knots) or (
-                y_knots and len(y_knots) != len(angle_knots)
-            ):
-                raise CoordinateMappingUnavailable(
-                    "orthogonal replay legacy row geometry is incomplete"
-                )
-            if y_knots and (
-                not finite(y_knots)
-                or not finite(angle_knots)
-                or not increasing(y_knots)
-            ):
-                raise CoordinateMappingUnavailable(
-                    "orthogonal replay legacy row geometry is invalid"
-                )
-            has_row_geometry = bool(y_knots and angle_knots)
-
-        if not math.isfinite(float(estimate.reference_x)):
-            raise CoordinateMappingUnavailable(
-                "orthogonal replay reference coordinate is not finite"
-            )
-        if not has_row_geometry and not separator_y:
-            raise CoordinateMappingUnavailable(
-                "orthogonal replay geometry is missing"
-            )
-
-    @classmethod
-    def _validate_orthogonal_snapshot(
-        cls, estimate: OrthogonalWarpEstimate,
-    ) -> None:
-        try:
-            cls._validate_orthogonal_replay_estimate(estimate)
-        except CoordinateMappingUnavailable:
-            raise
-        except (TypeError, ValueError, OverflowError, IndexError) as exc:
-            raise CoordinateMappingUnavailable(
-                "orthogonal replay geometry is malformed"
-            ) from exc
-
     def _build_orthogonal_steps(
         self,
     ) -> tuple[tuple[OrthogonalWarpEstimate, float], ...]:
-        analysis = self._analysis
-        if not analysis.orthogonal_applied:
-            return ()
-        saved_steps = analysis.orthogonal_steps
-        if not isinstance(saved_steps, (tuple, list)):
-            raise CoordinateMappingUnavailable("orthogonal replay steps must be a sequence of step records")
-        if saved_steps:
-            steps: list[tuple[OrthogonalWarpEstimate, float]] = []
-            for payload in saved_steps:
-                if not isinstance(payload, dict):
-                    raise CoordinateMappingUnavailable(
-                        "orthogonal replay step is malformed"
-                    )
-                try:
-                    estimate, row_gain = _orthogonal_estimate_from_step(dict(payload))
-                except (TypeError, ValueError, OverflowError) as exc:
-                    raise CoordinateMappingUnavailable(
-                        "orthogonal replay step is malformed"
-                    ) from exc
-                if not math.isfinite(float(row_gain)):
-                    raise CoordinateMappingUnavailable(
-                        "orthogonal row gain is not finite"
-                    )
-                self._validate_orthogonal_snapshot(estimate)
-                steps.append((estimate, float(row_gain)))
-            return tuple(steps)
-        if analysis.orthogonal_y_knots and analysis.orthogonal_angle_knots_deg:
-            if isinstance(analysis.orthogonal_row_gain, (bool, np.bool_)):
-                raise CoordinateMappingUnavailable("orthogonal replay legacy row gain must not be boolean")
-            try:
-                estimate = OrthogonalWarpEstimate(
-                    y_knots=tuple(analysis.orthogonal_y_knots),
-                    angle_knots_deg=tuple(analysis.orthogonal_angle_knots_deg),
-                    x_knots=tuple(analysis.orthogonal_x_knots),
-                    row_grid_rows=_orthogonal_grid_dimension(analysis.orthogonal_row_grid_rows, "row_grid_rows"),
-                    row_grid_cols=_orthogonal_grid_dimension(analysis.orthogonal_row_grid_cols, "row_grid_cols"),
-                    row_angle_grid_deg=tuple(
-                        analysis.orthogonal_row_angle_grid_deg
-                    ),
-                    row_displacement_grid_px=tuple(
-                        analysis.orthogonal_row_displacement_grid_px
-                    ),
-                    separator_y_knots=tuple(
-                        analysis.orthogonal_separator_y_knots
-                    ),
-                    separator_shift_knots_px=tuple(
-                        analysis.orthogonal_separator_shift_knots_px
-                    ),
-                    reference_x=float(analysis.orthogonal_reference_x),
-                    active=True,
-                )
-                row_gain = float(analysis.orthogonal_row_gain)
-            except (TypeError, ValueError, OverflowError) as exc:
-                raise CoordinateMappingUnavailable(
-                    "orthogonal replay legacy geometry is malformed"
-                ) from exc
-            if not math.isfinite(row_gain):
-                raise CoordinateMappingUnavailable(
-                    "orthogonal row gain is not finite"
-                )
-            self._validate_orthogonal_snapshot(estimate)
-            return ((estimate, row_gain),)
-        raise CoordinateMappingUnavailable(
-            "orthogonal replay geometry is missing"
-        )
+        try:
+            return orthogonal_replay_steps(self._analysis)
+        except (TypeError, ValueError, OverflowError, IndexError) as exc:
+            raise CoordinateMappingUnavailable(
+                f"orthogonal replay geometry is malformed: {exc}"
+            ) from exc
 
     @staticmethod
     def _normalized_projective_matrix(

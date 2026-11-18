@@ -1,13 +1,21 @@
 """R7.3 RED-first tests for strict persisted orthogonal replay scalars."""
 from __future__ import annotations
 
+from dataclasses import replace
+import json
+from types import SimpleNamespace
+
 import pytest
+from PIL import Image, ImageDraw
 
 from picture_capture.preprocess.coordinate_mapping import (
     CoordinateMappingUnavailable,
     PreprocessCoordinateMap,
 )
 from picture_capture.preprocess.models import PreprocessAnalysis
+from picture_capture.preprocess.persistence import load_analysis, result_path, save_analysis
+from picture_capture.preprocess.pipeline import geometry_corrected_image, save_processed_page
+from picture_capture.ui.preprocess_workflow import _preprocess_analysis_for_export
 
 
 def _payload(**overrides):
@@ -130,3 +138,97 @@ def test_list_of_modern_steps_matches_tuple_for_json_style_metadata():
     expected = PreprocessCoordinateMap(analysis).source_to_output_point((40.0, 45.0))
     analysis.orthogonal_steps = [payload]
     assert PreprocessCoordinateMap(analysis).source_to_output_point((40.0, 45.0)) == expected
+
+
+@pytest.mark.parametrize(("field", "value"), [
+    ("orthogonal_applied", "false"),
+    ("orthogonal_steps", {}),
+    ("orthogonal_steps", [_payload(), None]),
+    ("orthogonal_steps", [_payload(y_knots="123")]),
+    ("orthogonal_steps", [_payload(row_gain=float("nan"))]),
+    ("orthogonal_steps", [_payload(row_grid_cols=2.9)]),
+    ("orthogonal_steps", [_payload(row_angle_grid_deg=[], row_displacement_grid_px=[])]),
+    ("orthogonal_passes", 2),
+    ("source_width", float("inf")),
+])
+def test_saved_analysis_rejects_unreplayable_cache_without_rewriting_it(tmp_path, field, value):
+    page = tmp_path / "synthetic.png"
+    payload = _analysis(_payload()).to_dict()
+    payload[field] = value
+    path = result_path(tmp_path, page)
+    saved = json.dumps(payload).encode("utf-8")
+    path.write_bytes(saved)
+
+    assert load_analysis(tmp_path, page) is None
+    assert path.read_bytes() == saved
+
+
+@pytest.mark.parametrize(("field", "value"), [
+    ("orthogonal_row_grid_rows", 2.9),
+    ("orthogonal_row_grid_cols", "2"),
+    ("orthogonal_row_gain", True),
+    ("orthogonal_reference_x", float("inf")),
+    ("orthogonal_passes", 2),
+])
+def test_saved_legacy_cache_rejects_invalid_geometry_instead_of_coercing(tmp_path, field, value):
+    page = tmp_path / "synthetic.png"
+    payload = _legacy_analysis().to_dict()
+    payload[field] = value
+    result_path(tmp_path, page).write_text(json.dumps(payload), encoding="utf-8")
+    assert load_analysis(tmp_path, page) is None
+
+
+def test_invalid_second_stage_leaves_original_and_existing_export_untouched(tmp_path):
+    analysis = _analysis(_payload())
+    analysis.orthogonal_steps += ({"row_gain": 1.0},)
+    with Image.new("RGB", (100, 100), "white") as source:
+        page = tmp_path / "synthetic.png"
+        source.save(page)
+        with pytest.raises(ValueError, match="orthogonal"):
+            geometry_corrected_image(source, analysis)
+    destination = tmp_path / "processed" / page.name
+    destination.parent.mkdir()
+    before = page.read_bytes()
+    destination.write_bytes(before)
+    with pytest.raises(ValueError, match="orthogonal"):
+        save_processed_page(page, analysis, destination)
+    assert page.read_bytes() == destination.read_bytes() == before
+    with pytest.raises(CoordinateMappingUnavailable, match="orthogonal"):
+        PreprocessCoordinateMap(analysis)
+
+
+def test_export_reanalyzes_broken_cache_and_replays_two_valid_passes_after_reopen(tmp_path):
+    page = tmp_path / "synthetic.png"
+    with Image.new("RGB", (100, 100), "white") as source:
+        ImageDraw.Draw(source).rectangle((40, 40, 49, 49), fill="black")
+        source.save(page)
+    steps = tuple(
+        {"separator_y_knots": [0.0, 100.0], "separator_shift_knots_px": [shift, shift]}
+        for shift in (2.0, 3.0)
+    )
+    fresh = replace(_analysis(steps[0]), orthogonal_steps=steps, orthogonal_passes=2)
+    invalid = fresh.to_dict()
+    invalid["orthogonal_steps"] = [steps[0], None]
+    cache = result_path(tmp_path, page)
+    cache.write_text(json.dumps(invalid), encoding="utf-8")
+    analyses = []
+    deps = SimpleNamespace(
+        preprocess_analysis_is_current=lambda *_args, **_kwargs: True,
+        load_preprocess_analysis=load_analysis,
+        load_manual_perspective_quad=lambda *_args: None,
+        analyze_preprocess_path=lambda page, *_args, **_kwargs: analyses.append(page) or fresh,
+        save_preprocess_analysis=save_analysis,
+    )
+    project = SimpleNamespace(root=tmp_path)
+    recovered = _preprocess_analysis_for_export(None, deps, project, page, object(), 20, True, "auto")
+    assert analyses == [page]
+    assert recovered is fresh
+
+    reopened = load_analysis(tmp_path, page)
+    assert reopened is not None and reopened.orthogonal_steps == steps
+    mapped = PreprocessCoordinateMap(reopened).source_to_output_point((40.0, 45.0))
+    assert mapped.point == pytest.approx((35.0, 45.0))
+    destination = save_processed_page(page, reopened, tmp_path / "processed" / page.name)
+    with Image.open(destination) as result:
+        assert result.getpixel((35, 45)) == (0, 0, 0)
+        assert result.getpixel((34, 45)) == (255, 255, 255)
