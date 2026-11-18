@@ -74,7 +74,9 @@ def run():
                     app.settings.focused_review_timing_enabled,
                 )), "fresh synthetic AppSettings unexpectedly opted in",
             )
-            review = module.ReviewWindow(app)
+            app.open_review()
+            review = app.review_window
+            check(review is not None, "native open_review did not register the proofreading window")
             review.update()
             if not review.focused_panel_expanded.get():
                 review._toggle_focused_panel()
@@ -469,16 +471,24 @@ def run():
             before_inflight = pdic_path(page1).read_bytes()
             first_started = threading.Event()
             allow_first = threading.Event()
+            first_published = threading.Event()
+            allow_first_result = threading.Event()
             worker_words = []
             real_writer = module._apply_focused_review_page_updates
 
             def gated_synthetic_writer(the_page, pages, index, changes):
                 worker_words.append(tuple(change["new_word"] for change in changes))
-                if len(worker_words) == 1:
+                first = len(worker_words) == 1
+                if first:
                     first_started.set()
                     if not allow_first.wait(timeout=30):
                         raise RuntimeError("synthetic Tk concurrency gate timed out")
-                return real_writer(the_page, pages, index, changes)
+                result = real_writer(the_page, pages, index, changes)
+                if first:
+                    first_published.set()
+                    if not allow_first_result.wait(timeout=30):
+                        raise RuntimeError("synthetic Tk result delivery gate timed out")
+                return result
 
             # An unexpected save conflict must be a diagnostic failure, not
             # an undismissable native Tk modal that hangs the entire matrix.
@@ -518,6 +528,25 @@ def run():
                     )
                     allow_first.set()
                     _pump_until(
+                        app, first_published.is_set, seconds=35,
+                        description="G3 native Tk first PDIC publication before callback",
+                    )
+                    during_inflight = pdic_path(page1).read_bytes()
+                    check(
+                        review._filter_save_running
+                        and read_pdic(pdic_path(page1))[0].word == "synthetic-inflight-write",
+                        "native first write was not published while callback was held",
+                    )
+                    if app.autosave_job is not None:
+                        app.after_cancel(app.autosave_job)
+                    app.autosave_tick()
+                    check(
+                        pdic_path(page1).read_bytes() == during_inflight
+                        and worker_words == [("synthetic-inflight-write",)],
+                        "main autosave replaced a published focused write before its callback",
+                    )
+                    allow_first_result.set()
+                    _pump_until(
                         app,
                         lambda: bool(native_inflight_warnings) or (
                             len(worker_words) == 2
@@ -537,6 +566,7 @@ def run():
                     )
             finally:
                 allow_first.set()
+                allow_first_result.set()
 
             check(
                 worker_words

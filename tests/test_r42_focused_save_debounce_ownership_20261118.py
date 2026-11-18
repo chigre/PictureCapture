@@ -23,8 +23,13 @@ def _pdic_bytes(word):
     return f"{word}#3#4#37.5#50#001#@#@{os.linesep}".encode("utf-8")
 
 
+@pytest.fixture(scope="module")
+def focused_tcl():
+    return tk.Tcl()
+
+
 @pytest.fixture
-def focused_save(tmp_path):
+def focused_save(tmp_path, focused_tcl):
     page = tmp_path / "001.bmp"
     Image.new("RGB", (8, 8), "white").save(page)
     pdic = pdic_path_for_image(page)
@@ -34,9 +39,8 @@ def focused_save(tmp_path):
         "original_word": "before", "current_word": "before",
         "_focused_save_source_witness": focused_save_source_witness(page),
     }
-    tcl = tk.Tcl()
-    word = tk.StringVar(master=tcl, value="before")
-    status = tk.StringVar(master=tcl)
+    word = tk.StringVar(master=focused_tcl, value="before")
+    status = tk.StringVar(master=focused_tcl)
     timers, dispatches, failures, writes, warnings = {}, [], [], [], []
     post_write_errors = []
     sequence = iter(range(100))
@@ -91,12 +95,15 @@ def focused_save(tmp_path):
     review._flush_focused_changes_now = lambda: flow._flush_focused_changes_now(review, deps)
     review.autosave_commit = lambda: review_page_lifecycle.autosave_commit(review, None)
     review.winfo_exists = lambda: True
-    word.trace_add("write", lambda *_args: flow._commit_filter_editor_value(review, deps, 0))
-    return SimpleNamespace(
-        review=review, word=word, pdic=pdic, target=target, timers=timers, fire_next_timer=fire_next_timer,
-        dispatches=dispatches, failures=failures, writes=writes, warnings=warnings, status=status,
-        post_write_errors=post_write_errors,
-    )
+    trace = word.trace_add("write", lambda *_args: flow._commit_filter_editor_value(review, deps, 0))
+    try:
+        yield SimpleNamespace(
+            review=review, word=word, pdic=pdic, target=target, timers=timers, fire_next_timer=fire_next_timer,
+            dispatches=dispatches, failures=failures, writes=writes, warnings=warnings, status=status,
+            post_write_errors=post_write_errors,
+        )
+    finally:
+        word.trace_remove("write", trace)
 
 
 def test_success_replaces_pending_debounce_and_saves_latest_text(focused_save):
