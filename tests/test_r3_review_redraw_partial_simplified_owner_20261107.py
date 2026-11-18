@@ -84,3 +84,16 @@ def test_initial_empty_review_render_still_advances_to_materialization():
     with pytest.raises(ReachedPostClear):
         workflow.render_rows(view, deps, preloaded_crops=[object()])
     assert view.vars == []
+
+
+@pytest.mark.parametrize("crop_count", [0, 2])
+def test_mismatched_crop_count_requests_fresh_rows_before_materialization(crop_count):
+    view, deps, _status = _case(bound=False)
+    view.active_index = 0
+    requests = []
+    view._request_render_rows = lambda **kwargs: requests.append(kwargs)
+
+    workflow.render_rows(view, deps, preloaded_crops=[object()] * crop_count)
+
+    assert requests == [{"focus_index": 0}]
+    assert view._review_crop_render_generation == 0

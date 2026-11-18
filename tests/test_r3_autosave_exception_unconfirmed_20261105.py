@@ -6,6 +6,7 @@ from __future__ import annotations
 
 from contextlib import nullcontext
 from pathlib import Path
+import tkinter as tk
 from types import SimpleNamespace
 
 import pytest
@@ -135,3 +136,41 @@ def test_uncertain_review_write_cannot_be_acknowledged_by_following_ppp_autosave
     assert app._deferred_save_uncertain is True
     assert review._r3_autosave_unconfirmed is True
     assert "未确认" in statuses[-1]
+
+
+def test_tk_read_failure_keeps_review_owner_until_next_autosave(monkeypatch):
+    review, statuses = _review(dirty=False)
+    _install(monkeypatch, None)
+    app = review.parent
+    var = review.vars[0]
+    original_get = var.get
+
+    def unreadable():
+        raise tk.TclError("unavailable editor")
+
+    calls = []
+    app.review_window = review
+    app.autosave_var = SimpleNamespace(get=lambda: True)
+    app._batch_active = False
+    app.save_pdic = lambda **_kw: calls.append("main")
+    app._save_normalized_ppp = lambda: calls.append("ppp") or False
+    app.toggle_autosave = lambda: calls.append("rearmed")
+    review.winfo_exists = lambda: True
+    review.autosave_commit = lambda: lifecycle.autosave_commit(review, None)
+    var.get = unreadable
+
+    main_pdic_persistence.autosave_tick(app, deps={"tk": tk})
+    assert app.review_window is review
+    assert calls == ["rearmed"]
+    assert review._r3_autosave_unconfirmed
+    assert "自动保存失败" in statuses[-1]
+
+    var.get = original_get
+    main_pdic_persistence.autosave_tick(app, deps={"tk": tk})
+    assert calls == ["rearmed", "ppp", "rearmed"]
+    assert not review._r3_autosave_unconfirmed
+
+    review.winfo_exists = lambda: False
+    main_pdic_persistence.autosave_tick(app, deps={"tk": tk})
+    assert app.review_window is None
+    assert calls[-3:] == ["main", "ppp", "rearmed"]

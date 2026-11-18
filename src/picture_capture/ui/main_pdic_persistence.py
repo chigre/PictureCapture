@@ -161,12 +161,9 @@ def autosave_tick(self, *, deps: dict[str, Any]) -> None:
             review = self.review_window
             review_saved = False
             if review is not None:
-                try:
-                    if review.winfo_exists():
-                        review_saved = bool(review.autosave_commit())
-                    else:
-                        self.review_window = None
-                except tk.TclError:
+                if review.winfo_exists():
+                    review_saved = bool(review.autosave_commit())
+                else:
                     self.review_window = None
             if not review_saved:
                 self.save_pdic(silent=True)
@@ -203,7 +200,7 @@ def autosave_tick(self, *, deps: dict[str, Any]) -> None:
                     )
                 else:
                     self.status_var.set("已自动保存")
-    except (OSError, RuntimeError, ValueError) as exc:
+    except (OSError, RuntimeError, ValueError, tk.TclError):
         # In particular, never fall back to stale main-canvas buffers when
         # ReviewWindow's PDIC transaction failed.
         self.status_var.set(

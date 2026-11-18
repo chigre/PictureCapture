@@ -7,7 +7,10 @@ Uses synthetic Tk-like text buffers, never reads or saves real user files.
 from __future__ import annotations
 
 from pathlib import Path
+from tkinter import TclError
 from types import SimpleNamespace
+
+import pytest
 
 from picture_capture.ui import review_page_lifecycle as lifecycle
 
@@ -119,3 +122,24 @@ def test_pending_retry_refuses_uncertain_write_even_with_complete_rebound_rows()
     assert review._r3_autosave_unconfirmed is True
     assert navigation == claims == []
     assert any("先前" in msg and "未确认" in msg for msg in messages)
+
+
+@pytest.mark.parametrize("column", ["vars", "simplified_vars"])
+def test_pending_unreadable_editor_blocks_save_and_navigation(column):
+    review, deps, messages, navigation, claims = _case(complete=True)
+    editor = getattr(review, column)[0]
+    original_get = editor.get
+
+    def unreadable():
+        raise TclError("unavailable editor")
+
+    editor.get = unreadable
+    assert lifecycle.save(review, deps, redraw_main=False) is False
+    lifecycle.change_page(review, deps, 1)
+    assert navigation == claims == []
+    assert review._r3_autosave_unconfirmed
+    assert all("编辑框暂不可读取" in message for message in messages)
+
+    editor.get = original_get
+    assert lifecycle.save(review, deps, redraw_main=False) is True
+    assert not review._r3_autosave_unconfirmed

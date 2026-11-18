@@ -94,7 +94,7 @@ def test_commit_new_page_refreshes_focus_rows_scroll_title_and_parameter_values(
     assert review.calls[-1] == ("title",)
 
 
-def test_prefetched_review_crop_is_used_only_with_matching_signature():
+def test_prefetched_review_crop_is_used_only_with_matching_signature_and_count():
     app = make_app()
     refresh_review_after_page_change(app, {"review_key": ("fresh",), "review_crops": ["crop"]})
     assert ("prefetched", ["crop"]) in app.review_window.calls
@@ -102,6 +102,11 @@ def test_prefetched_review_crop_is_used_only_with_matching_signature():
 
     app = make_app()
     refresh_review_after_page_change(app, {"review_key": ("old",), "review_crops": ["old"]})
+    assert ("render", 0, True) in app.review_window.calls
+    assert not any(e[0] == "prefetched" for e in app.review_window.calls)
+
+    app = make_app()
+    refresh_review_after_page_change(app, {"review_key": ("fresh",), "review_crops": ["a", "b"]})
     assert ("render", 0, True) in app.review_window.calls
     assert not any(e[0] == "prefetched" for e in app.review_window.calls)
 

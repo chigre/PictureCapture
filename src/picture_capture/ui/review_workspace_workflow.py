@@ -880,7 +880,7 @@ def render_rows(self, deps: ReviewWorkspaceDeps, preloaded_crops: list[Image.Ima
     # Validate crop cardinality BEFORE destroying the previous editors.
     # An async crop from an earlier layout generation cannot clear human text.
     ordered = self.parent._ordered_entries_reading_order()
-    if len(preloaded_crops) < len(ordered):
+    if len(preloaded_crops) != len(ordered):
         self._request_render_rows(focus_index=self.active_index)
         return
     pending_original_words = {}

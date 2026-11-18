@@ -84,7 +84,7 @@ def refresh_review_after_page_change(app: Any, preloaded: dict | None = None) ->
             and preloaded.get("review_key") == review._review_prefetch_key()
         ):
             crops = preloaded.get("review_crops")
-        if crops is not None and len(crops) >= len(app.entries):
+        if crops is not None and len(crops) == len(app.entries):
             review.render_rows(preloaded_crops=list(crops))
         else:
             review._request_render_rows(focus_index=0, reset_scroll=True)

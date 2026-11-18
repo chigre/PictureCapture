@@ -6,6 +6,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from hashlib import sha256
+from tkinter import TclError
 from typing import TYPE_CHECKING
 
 from ..runtime.source_file_stamp import source_file_digest, source_file_stamp
@@ -317,6 +318,8 @@ def _review_evidence_after_save(self, deps: ReviewPageDeps, previous: list[WordE
 
 def _safe_review_save_failure(error: Exception) -> str:
     """Privacy-safe, ACTIONABLE error code; never interpolate user paths/text."""
+    if isinstance(error, TclError):
+        return "校对编辑框暂不可读取，请核对当前行后重试"
     if isinstance(error, OSError):
         return "R3-IO：文件写入或磁盘权限失败，请检查目标目录与磁盘空间"
     message = str(error)
@@ -430,6 +433,20 @@ def save(self, deps: ReviewPageDeps, *, redraw_main: bool = True) -> bool:
     from ..proofreading.main_editor_sync import bridge_main_canvas_text_into_review
     try:
         bridge_main_canvas_text_into_review(self)
+        if state == "pending":
+            word_dirty = any(
+                variable.get().strip() != entry.word
+                for entry, variable in zip(row_entries, self.vars)
+            )
+            simplified_dirty = bool(
+                self.parent.current_page and (
+                    self.parent.current_page.stem in self._simplified_dirty_pages
+                    or _has_unreported_simplified_input(self)
+                )
+            )
+    except TclError as error:
+        self.parent.status_var.set(f"校对保存未完成：{_safe_review_save_failure(error)}。")
+        return False
     except (OSError, RuntimeError, ValueError):
         self.parent.status_var.set(
             "主界面与校对窗口的文本或来源存在冲突，未保存；"
@@ -437,18 +454,7 @@ def save(self, deps: ReviewPageDeps, *, redraw_main: bool = True) -> bool:
         )
         return False
     if state == "pending":
-        word_dirty = any(
-            variable.get().strip() != entry.word
-            for entry, variable in zip(row_entries, self.vars)
-        )
-        simplified_dirty = bool(
-            self.parent.current_page and (
-                self.parent.current_page.stem in self._simplified_dirty_pages
-                or _has_unreported_simplified_input(self)
-            )
-        )
-        dirty = word_dirty or simplified_dirty
-        if not dirty:
+        if not (word_dirty or simplified_dirty):
             # Browsing a pending page must not accidentally reserve it.
             self.parent.settings.review_zoom_percent = self._stored_review_zoom_percent()
             self._r3_autosave_unconfirmed = False
@@ -494,7 +500,7 @@ def save(self, deps: ReviewPageDeps, *, redraw_main: bool = True) -> bool:
         finally:
             self.__dict__.pop("_r3_detached_original_save_source", None)
             self.__dict__.pop("_r3_explicit_detached_source_rejoin", None)
-    except (OSError, RuntimeError, ValueError, UnicodeError) as error:
+    except (OSError, RuntimeError, ValueError, UnicodeError, TclError) as error:
         # Only fixed diagnostic classes go to the UI. Do not print exception
         # arguments, filenames, user words or machine paths.
         reason = _safe_review_save_failure(error)
