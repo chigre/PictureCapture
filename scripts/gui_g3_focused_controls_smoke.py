@@ -74,10 +74,18 @@ def run():
                     app.settings.focused_review_timing_enabled,
                 )), "fresh synthetic AppSettings unexpectedly opted in",
             )
+            # Keep the focused editor clock active and drive the independent
+            # main-window clock only at the controlled interleaving below.
+            app.autosave_var.set(False)
+            app.toggle_autosave()
             app.open_review()
             review = app.review_window
             check(review is not None, "native open_review did not register the proofreading window")
             review.update()
+            _pump_until(
+                app, lambda: app._quick_autosave_job is None,
+                seconds=35, description="G3 initial review-open settings settle",
+            )
             if not review.focused_panel_expanded.get():
                 review._toggle_focused_panel()
                 review.update()
@@ -303,6 +311,10 @@ def run():
                 and all(len(fields) == 8 for fields in before_drift_rows),
                 "native synthetic PDIC fixture is not two eight-field rows",
             )
+            # The controlled main autosave also runs the independent PPP
+            # writer. Put the disposable fixture in its canonical format
+            # before taking the byte-exact no-change baseline.
+            app._save_normalized_ppp()
             before_ppp = ppp_read_path_for_image(page1).read_bytes()
             before_settings = settings_path(root).read_bytes()
             before_main_words = [(e.word, e.x, e.y) for e in app.entries]
@@ -453,14 +465,14 @@ def run():
                 and target["current_word"] == "synthetic-native-retried",
                 "native positive retry did not reconcile Tk, PDIC and main source XY",
             )
-            check(
-                ppp_read_path_for_image(page1).read_bytes() == before_ppp
-                and settings_path(root).read_bytes() == before_settings
-                and (section_path.read_bytes() if section_original is not None else None)
-                == section_original
-                and [p.read_bytes() for p in (page1, page2)] == before_image,
-                "native positive retry mutated PPP, settings, SECTION or original image",
-            )
+            check(ppp_read_path_for_image(page1).read_bytes() == before_ppp,
+                  "native positive retry mutated PPP")
+            check(settings_path(root).read_bytes() == before_settings,
+                  "native positive retry mutated settings")
+            check((section_path.read_bytes() if section_path.exists() else None) == section_original,
+                  "native positive retry mutated SECTION")
+            check([p.read_bytes() for p in (page1, page2)] == before_image,
+                  "native positive retry mutated the original images")
             check(not origin.exists(), "retry fabricated retroactive OCR provenance")
 
             # Native Tk in-flight reversion race, with a real background
@@ -537,9 +549,12 @@ def run():
                         and read_pdic(pdic_path(page1))[0].word == "synthetic-inflight-write",
                         "native first write was not published while callback was held",
                     )
-                    if app.autosave_job is not None:
-                        app.after_cancel(app.autosave_job)
-                    app.autosave_tick()
+                    app.autosave_var.set(True)
+                    try:
+                        app.autosave_tick()
+                    finally:
+                        app.autosave_var.set(False)
+                        app.toggle_autosave()
                     check(
                         pdic_path(page1).read_bytes() == during_inflight
                         and worker_words == [("synthetic-inflight-write",)],
