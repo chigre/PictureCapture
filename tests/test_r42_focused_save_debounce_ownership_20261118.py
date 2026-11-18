@@ -14,6 +14,7 @@ from picture_capture.proofreading.focused_crop_source_fingerprint import focused
 from picture_capture.proofreading.focused_pdic_updates import FocusedPdicDeps, apply_focused_review_page_updates
 from picture_capture.proofreading.pdic_restore import write_pdic_atomic
 from picture_capture.ui import focused_filter_workflow as flow
+from picture_capture.ui import main_pdic_persistence, review_page_lifecycle
 
 
 @pytest.fixture
@@ -30,7 +31,8 @@ def focused_save(tmp_path):
     tcl = tk.Tcl()
     word = tk.StringVar(master=tcl, value="before")
     status = tk.StringVar(master=tcl)
-    timers, dispatches, writes, warnings = {}, [], [], []
+    timers, dispatches, failures, writes, warnings = {}, [], [], [], []
+    post_write_errors = []
     sequence = iter(range(100))
 
     def after(delay, callback):
@@ -43,11 +45,17 @@ def focused_save(tmp_path):
         _, callback = timers.pop(token)
         callback()
 
-    def dispatch(_key, worker, done, _failed, **_kwargs):
+    def dispatch(_key, worker, done, failed, **_kwargs):
         dispatches.append((worker, done))
+        failures.append(failed)
         return len(dispatches)
 
-    pdic_deps = FocusedPdicDeps(pdic_path_for_image, read_pdic, replace, Image, write_pdic_atomic)
+    def publish(*args):
+        write_pdic_atomic(*args)
+        if post_write_errors:
+            raise post_write_errors.pop()
+
+    pdic_deps = FocusedPdicDeps(pdic_path_for_image, read_pdic, replace, Image, publish)
 
     def write(the_page, pages, index, changes):
         writes.append(tuple((change["original_word"], change["new_word"]) for change in changes))
@@ -56,7 +64,10 @@ def focused_save(tmp_path):
     deps = SimpleNamespace(
         tk=tk,
         _apply_focused_review_page_updates=write,
-        messagebox=SimpleNamespace(showwarning=lambda *args, **_kwargs: warnings.append(args)),
+        messagebox=SimpleNamespace(
+            showwarning=lambda *args, **_kwargs: warnings.append(args),
+            showerror=lambda *args, **_kwargs: warnings.append(args),
+        ),
     )
     review = SimpleNamespace(
         parent=SimpleNamespace(
@@ -71,10 +82,14 @@ def focused_save(tmp_path):
     )
     review._queue_focused_change = lambda row, value: flow._queue_focused_change(review, deps, row, value)
     review._flush_focused_changes = lambda: flow._flush_focused_changes(review, deps)
+    review._flush_focused_changes_now = lambda: flow._flush_focused_changes_now(review, deps)
+    review.autosave_commit = lambda: review_page_lifecycle.autosave_commit(review, None)
+    review.winfo_exists = lambda: True
     word.trace_add("write", lambda *_args: flow._commit_filter_editor_value(review, deps, 0))
     return SimpleNamespace(
         review=review, word=word, pdic=pdic, target=target, timers=timers, fire_next_timer=fire_next_timer,
-        dispatches=dispatches, writes=writes, warnings=warnings, status=status,
+        dispatches=dispatches, failures=failures, writes=writes, warnings=warnings, status=status,
+        post_write_errors=post_write_errors,
     )
 
 
@@ -100,7 +115,7 @@ def test_success_replaces_pending_debounce_and_saves_latest_text(focused_save):
     done(worker())
 
     assert case.pdic.read_bytes() == b"latest#3#4#37.5#50#001#@#@\n"
-    assert case.writes == [(('before', 'first'),), (('first', 'latest'),)]
+    assert case.writes == [(("before", "first"),), (("first", "latest"),)]
     assert case.target["original_word"] == case.word.get() == "latest"
     assert case.warnings == []
     assert old_timer not in case.timers
@@ -167,3 +182,72 @@ def test_inflight_reversion_to_original_is_saved_after_first_commit(focused_save
     assert case.pdic.read_bytes() == original_bytes
     assert not case.timers and not case.review._filter_pending_changes
     assert case.warnings == []
+
+
+def _run_shared_autosave(case):
+    app = case.review.parent
+    touches = []
+    app.autosave_var = SimpleNamespace(get=lambda: True)
+    app._batch_active = False
+    app.current_page = app.project.images[0]
+    app.review_window = case.review
+    app.save_pdic = lambda **_kwargs: touches.append("main PDIC")
+    app._save_normalized_ppp = lambda: touches.append("PPP") or True
+    app.toggle_autosave = lambda: touches.append("rearm")
+    main_pdic_persistence.autosave_tick(app, deps={"tk": tk})
+    return touches
+
+
+@pytest.mark.parametrize("failure", ["launch-refused", "after-pdic-publication"])
+def test_shared_autosave_cannot_replay_an_unconfirmed_focused_save(focused_save, failure):
+    case = focused_save
+    app = case.review.parent
+    dispatch = app._start_ui_worker
+    original_bytes = case.pdic.read_bytes()
+    case.word.set("first")
+    if failure == "launch-refused":
+        app._start_ui_worker = lambda *_args, **_kwargs: -1
+        case.fire_next_timer()
+        assert case.review._filter_save_launch_failed
+        app._start_ui_worker = dispatch
+        expected_bytes = original_bytes
+    else:
+        case.fire_next_timer()
+        case.post_write_errors.append(OSError("synthetic post-publication failure"))
+        with pytest.raises(OSError, match="synthetic post-publication failure") as error:
+            case.dispatches[0][0]()
+        case.failures[0](error.value, "synthetic error details")
+        expected_bytes = b"first#3#4#37.5#50#001#@#@\n"
+
+    assert case.pdic.read_bytes() == expected_bytes
+    assert case.review._filter_save_uncertain_pages == {0}
+    attempt_count = len(case.dispatches)
+    assert _run_shared_autosave(case) == ["PPP", "rearm"]
+    assert len(case.dispatches) == attempt_count
+    assert case.review._filter_pending_changes[0][(3, 4)]["new_word"] == "first"
+    assert case.word.get() == "first" and case.target["original_word"] == "before"
+    assert case.pdic.read_bytes() == expected_bytes
+    assert case.review._filter_save_uncertain_pages == {0}
+    assert "未确认" in case.status.get()
+
+    if failure == "launch-refused":
+        # After checking that the refused launch did not write, a deliberate
+        # save uses the existing explicit entry point and settles ownership.
+        assert review_page_lifecycle.save(case.review, None, redraw_main=False) is False
+        assert len(case.dispatches) == attempt_count + 1
+        work, complete = case.dispatches[-1]
+        complete(work())
+        assert case.pdic.read_bytes() == b"first#3#4#37.5#50#001#@#@\n"
+        assert not case.review._filter_save_uncertain_pages
+        assert not case.review._filter_pending_changes
+
+
+def test_shared_autosave_still_flushes_ordinary_pending_focused_edit(focused_save):
+    case = focused_save
+    case.word.set("first")
+    assert _run_shared_autosave(case) == ["PPP", "rearm"]
+    assert len(case.dispatches) == 1
+    worker, done = case.dispatches[0]
+    done(worker())
+    assert case.pdic.read_bytes() == b"first#3#4#37.5#50#001#@#@\n"
+    assert not case.review._filter_pending_changes and not case.timers
