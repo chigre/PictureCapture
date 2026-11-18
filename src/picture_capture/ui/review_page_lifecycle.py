@@ -108,6 +108,40 @@ def _has_unreported_simplified_input(self) -> bool:
     return False
 
 
+def _owns_rendered_original_rows(self, rows) -> bool:
+    live_entries = getattr(self.parent, "entries", None)
+    rendered_stem = getattr(self, "_rendered_page_stem", None)
+    if len(rows) != len(self.vars) or (
+        rendered_stem is not None
+        and rendered_stem != getattr(self.parent.current_page, "stem", None)
+    ):
+        return False
+    if live_entries is None:
+        return True
+    row_ids = {id(row) for row in rows}
+    return len(rows) == len(live_entries) == len(row_ids) and row_ids == {
+        id(row) for row in live_entries
+    }
+
+
+def _owns_rendered_simplified_rows(self, rows) -> bool:
+    variables = getattr(self, "simplified_vars", None)
+    if variables is None or (not rows and not variables):
+        return True
+    from .review_simplified_workflow import _owned_rendered_simplified_rows
+    return _owned_rendered_simplified_rows(self) is not None
+
+
+def _refuse_uncertain_review_save(self) -> bool:
+    if not getattr(self.parent, "_deferred_save_uncertain", False):
+        return False
+    self._r3_autosave_unconfirmed = True
+    self.parent.status_var.set(
+        "先前校对保存结果未确认；输入仍保留，请核对磁盘与校对窗口后重试。"
+    )
+    return True
+
+
 def autosave_commit(self, deps: ReviewPageDeps) -> bool:
     """Commit review edits for the shared main-window autosave timer."""
     if getattr(self, "_filter_rows_active", False):
@@ -140,13 +174,9 @@ def autosave_commit(self, deps: ReviewPageDeps) -> bool:
         return False
     if not self.parent.project or not self.parent.current_page:
         return False
-    if getattr(self.parent, "_deferred_save_uncertain", False):
+    if _refuse_uncertain_review_save(self):
         # A post-write error can leave both the model and editor showing the
         # new text. Equality cannot clear an unresolved PDIC write outcome.
-        self._r3_autosave_unconfirmed = True
-        self.parent.status_var.set(
-            "先前校对保存结果未确认；输入仍保留，请核对磁盘与校对窗口后重试。"
-        )
         return True
     state = self.parent._foreground_batch_state(self.parent.current_index)
     if state == "processing":
@@ -161,19 +191,7 @@ def autosave_commit(self, deps: ReviewPageDeps) -> bool:
     # cannot acknowledge a ReviewWindow autosave. A True refusal blocks the
     # shared main timer from writing stale buffers over the same PDIC.
     row_entries = self._bound_row_entries()
-    live_entries = getattr(self.parent, "entries", None)
-    rendered_stem = getattr(self, "_rendered_page_stem", None)
-    if (
-        len(row_entries) != len(self.vars)
-        or (rendered_stem is not None and rendered_stem != self.parent.current_page.stem)
-        or (
-            live_entries is not None and (
-                len(row_entries) != len(live_entries)
-                or len({id(row) for row in row_entries}) != len(row_entries)
-                or {id(row) for row in row_entries} != {id(row) for row in live_entries}
-            )
-        )
-    ):
+    if not _owns_rendered_original_rows(self, row_entries):
         self._r3_autosave_unconfirmed = True
         self.parent.status_var.set(
             "校对行绑定已变化，本次自动保存未确认；人工输入仍保留，请核对页面后重试。"
@@ -184,15 +202,13 @@ def autosave_commit(self, deps: ReviewPageDeps) -> bool:
     # otherwise PPP success can mask human text that was never committed.
     # Real ReviewWindow has simplified_vars; legacy original-only test doubles
     # without that column retain their existing mock ABI.
-    if row_entries and getattr(self, "simplified_vars", None) is not None:
-        from .review_simplified_workflow import _owned_rendered_simplified_rows
-        if _owned_rendered_simplified_rows(self) is None:
-            self._r3_autosave_unconfirmed = True
-            self.parent.status_var.set(
-                "简体校对行尚未完整绑定，本次自动保存未确认；"
-                "文字仍保留，请页面刷新后重试。"
-            )
-            return True
+    if not _owns_rendered_simplified_rows(self, row_entries):
+        self._r3_autosave_unconfirmed = True
+        self.parent.status_var.set(
+            "简体校对行尚未完整绑定，本次自动保存未确认；"
+            "文字仍保留，请页面刷新后重试。"
+        )
+        return True
     # A failure at ANY later stage must keep the review text unconfirmed.
     # Clear this only after an unchanged no-op or a verified R3 bundle.
     self._r3_autosave_unconfirmed = True
@@ -390,26 +406,27 @@ def save(self, deps: ReviewPageDeps, *, redraw_main: bool = True) -> bool:
                 "禁止离开当前页面，请核对 PDIC 后显式重试。"
             )
         return not unresolved
+    if _refuse_uncertain_review_save(self):
+        return False
     settings_path = deps.settings_path
+    self._r3_autosave_unconfirmed = True
     state = self.parent._foreground_batch_state(self.parent.current_index)
     if state == "processing":
         self.parent.status_var.set("当前页正在后台处理，校对窗口保持只读，未写入 PDIC。")
         return False
-    # A pending page's clean/no-op fast path bypasses the guarded bundle.
-    # Never acknowledge (or navigate away from) partially rebound simplified
-    # widgets merely because their dirty callback has not yet been delivered.
-    # Match the R3 autosave owner gate; legacy original-only views still work.
-    if state == "pending" and self._bound_row_entries() and getattr(
-        self, "simplified_vars", None
-    ) is not None:
-        from .review_simplified_workflow import _owned_rendered_simplified_rows
-        if _owned_rendered_simplified_rows(self) is None:
-            self._r3_autosave_unconfirmed = True
-            self.parent.status_var.set(
-                "简体校对行尚未完整绑定，显式保存未确认；"
-                "人工输入仍保留，请核对页面后重试。"
-            )
-            return False
+    row_entries = self._bound_row_entries()
+    if not _owns_rendered_original_rows(self, row_entries):
+        self.parent.status_var.set(
+            "原词校对行尚未完整绑定，显式保存未确认；"
+            "人工输入仍保留，请核对页面后重试。"
+        )
+        return False
+    if not _owns_rendered_simplified_rows(self, row_entries):
+        self.parent.status_var.set(
+            "简体校对行尚未完整绑定，显式保存未确认；"
+            "人工输入仍保留，请核对页面后重试。"
+        )
+        return False
     from ..proofreading.main_editor_sync import bridge_main_canvas_text_into_review
     try:
         bridge_main_canvas_text_into_review(self)
@@ -420,10 +437,9 @@ def save(self, deps: ReviewPageDeps, *, redraw_main: bool = True) -> bool:
         )
         return False
     if state == "pending":
-        row_entries = self._bound_row_entries()
         word_dirty = any(
-            i < len(row_entries) and self.vars[i].get().strip() != row_entries[i].word
-            for i in range(len(self.vars))
+            variable.get().strip() != entry.word
+            for entry, variable in zip(row_entries, self.vars)
         )
         simplified_dirty = bool(
             self.parent.current_page and (
@@ -435,6 +451,7 @@ def save(self, deps: ReviewPageDeps, *, redraw_main: bool = True) -> bool:
         if not dirty:
             # Browsing a pending page must not accidentally reserve it.
             self.parent.settings.review_zoom_percent = self._stored_review_zoom_percent()
+            self._r3_autosave_unconfirmed = False
             return True
         if not self.parent._claim_page_for_manual_edit():
             return False
@@ -494,6 +511,7 @@ def save(self, deps: ReviewPageDeps, *, redraw_main: bool = True) -> bool:
         return False
     self._review_evidence_after_save(evidence_before)
     record_review_after(self, transaction_before)
+    self._r3_autosave_unconfirmed = False
     if self.parent.project:
         try:
             self.parent.settings.to_json(settings_path(self.parent.project.root))

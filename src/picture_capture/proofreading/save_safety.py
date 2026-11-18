@@ -1,7 +1,7 @@
 """Fail-closed in-memory state protection around ordinary R3 PDIC saves.
 
-The persisted PDIC is authoritative. Restore in-memory Entry and editor state
-only when exact pre-save PDIC bytes remain unchanged after a write failure.
+The persisted files are authoritative. Restore in-memory Entry and editor state
+only when the relevant saved bytes remain unchanged after a write failure.
 Never overwrite a changed file or claim cross-file OS atomicity.
 """
 from __future__ import annotations
@@ -13,6 +13,8 @@ from typing import Any
 import tkinter as tk
 
 from ..io.formats import pdic_path
+from ..persistence.project_storage import simplified_review_path_for_image
+from .transactions import _marker_present, _recovery_path
 
 
 def _bytes_or_absent(path):
@@ -63,21 +65,21 @@ def _live_editors_unchanged(app: Any, saved) -> bool:
     return True
 
 
-def _review_vars_state(review: Any):
-    """Freeze the word-input values without altering live ReviewWindow vars."""
+def _review_vars_state(variables):
+    """Freeze one column's inputs without altering live ReviewWindow vars."""
     result = []
     try:
-        for var in tuple(getattr(review, "vars", ())):
+        for var in tuple(variables):
             result.append((var, str(var.get())))
     except (tk.TclError, RuntimeError):
         return None
     return tuple(result)
 
 
-def _review_vars_unchanged(review: Any, saved) -> bool:
+def _review_vars_unchanged(variables, saved) -> bool:
     if saved is None:
         return False
-    live = tuple(getattr(review, "vars", ()))
+    live = tuple(variables)
     if len(live) != len(saved):
         return False
     for var, (old_var, text) in zip(live, saved):
@@ -130,11 +132,13 @@ def protect_app_pdic_commit(app: Any):
 
 @contextmanager
 def protect_review_pdic_commit(review: Any):
-    """Preserve unsaved ReviewWindow vars if the PDIC did not change."""
+    """Restore model state only when both saved files and both editors agree."""
     app = review.parent
     page = app.current_page
     path = pdic_path(page)
     before = _bytes_or_absent(path)
+    sidecar = simplified_review_path_for_image(page)
+    sidecar_before = _bytes_or_absent(sidecar)
     entries = tuple(app.entries)
     words = tuple((entry, str(entry.word)) for entry in entries)
     editors = _editor_state(app)
@@ -143,14 +147,25 @@ def protect_review_pdic_commit(review: Any):
     dirty = set(getattr(review, "_simplified_dirty_pages", set()))
     flags = list(getattr(review, "simplified_manual_flags", []))
     values = list(getattr(review, "simplified_actual_values", []))
-    review_vars = _review_vars_state(review)
+    review_vars = _review_vars_state(getattr(review, "vars", ()))
+    simplified_vars = _review_vars_state(getattr(review, "simplified_vars", ()))
     try:
         yield
     except Exception:
-        if (
+        disk_unchanged = (
             _verified_same_disk_snapshot(app, page, path, before)
+            and _verified_same_disk_snapshot(app, page, sidecar, sidecar_before)
+        )
+        if disk_unchanged:
+            try:
+                disk_unchanged = not _marker_present(_recovery_path(page))
+            except OSError:
+                disk_unchanged = False
+        if (
+            disk_unchanged
             and _live_editors_unchanged(app, editors)
-            and _review_vars_unchanged(review, review_vars)
+            and _review_vars_unchanged(getattr(review, "vars", ()), review_vars)
+            and _review_vars_unchanged(getattr(review, "simplified_vars", ()), simplified_vars)
         ):
             app.entries[:] = entries
             for entry, word in words:
