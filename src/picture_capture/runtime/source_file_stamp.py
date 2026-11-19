@@ -41,11 +41,18 @@ def source_file_stamp(stream: BinaryIO) -> tuple[int, ...]:
 
 def source_file_digest(path: Path, *, stamp=source_file_stamp) -> tuple[tuple[int, ...], bytes]:
     """Stream the complete source and reject metadata changes during the read."""
-    digest = sha256()
     with path.open("rb") as stream:
-        before = stamp(stream)
-        for chunk in iter(lambda: stream.read(1024 * 1024), b""):
-            digest.update(chunk)
-        if stamp(stream) != before:
-            raise OSError("源图已变化，请重新加载页面后重试")
+        return source_stream_digest(stream, stamp=stamp)
+
+
+def source_stream_digest(stream: BinaryIO, *, stamp=source_file_stamp) -> tuple[tuple[int, ...], bytes]:
+    """Hash the same open file a caller will decode, then rewind it."""
+    stream.seek(0)
+    before = stamp(stream)
+    digest = sha256()
+    for chunk in iter(lambda: stream.read(1024 * 1024), b""):
+        digest.update(chunk)
+    if stamp(stream) != before:
+        raise OSError("源图已变化，请重新加载页面后重试")
+    stream.seek(0)
     return before, digest.digest()

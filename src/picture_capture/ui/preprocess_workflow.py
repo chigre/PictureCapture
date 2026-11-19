@@ -8,6 +8,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
+from ..preprocess.persistence import open_analysis_image
+
 if TYPE_CHECKING:
     from pathlib import Path
     from PIL import Image, ImageTk
@@ -1456,6 +1458,7 @@ def _get_preprocess_display_photo(
     if self.image is None:
         raise RuntimeError("没有可显示的页面图像")
     analysis_key = (
+        id(analysis),
         None if analysis is None else round(float(analysis.applied_angle_deg), 4),
         None if analysis is None else analysis.geometry_mode,
         None if analysis is None else round(float(analysis.geometry_strength_px), 3),
@@ -1469,14 +1472,14 @@ def _get_preprocess_display_photo(
         return self._preprocess_photo
 
     if analysis is not None:
-        corrected_key = (id(self.image), id(analysis))
+        corrected_key = (self.current_page, id(self.image), id(analysis))
         if (
             self._preprocess_corrected_image is None
             or self._preprocess_corrected_image_key != corrected_key
         ):
-            self._preprocess_corrected_image = geometry_corrected_image(
-                self.image, analysis,
-            )
+            with open_analysis_image(self.current_page, analysis) as source:
+                corrected = geometry_corrected_image(source, analysis)
+            self._preprocess_corrected_image = corrected
             self._preprocess_corrected_image_key = corrected_key
         display = self._preprocess_corrected_image.resize(
             size, Image.Resampling.LANCZOS
@@ -1487,8 +1490,8 @@ def _get_preprocess_display_photo(
         display = self.image.resize(size, Image.Resampling.LANCZOS)
     display = themed_display_image(display, self.appearance_mode)
     if analysis is not None:
-        sx = size[0] / max(1, analysis.source_width)
-        sy = size[1] / max(1, analysis.source_height)
+        sx = size[0] / self._preprocess_corrected_image.width
+        sy = size[1] / self._preprocess_corrected_image.height
         x0, y0, x1, y1 = analysis.crop_box
         display = overlay_excluded_regions(
             display,
@@ -1504,7 +1507,12 @@ def _get_preprocess_display_photo(
 
 def _redraw_preprocess_preview(self, deps: PreprocessUiDeps, size: tuple[int, int]) -> None:
     analysis = self._preprocess_result_for_page(self.current_index)
-    photo = self._get_preprocess_display_photo(size, analysis)
+    try:
+        photo = self._get_preprocess_display_photo(size, analysis)
+    except OSError:
+        photo = self._get_preprocess_display_photo(size, None)
+        analysis = None
+        self.status_var.set("预览时源图无法读取或已变化，请重新加载页面后分析。")
     self.canvas.create_image(0, 0, image=photo, anchor="nw", tags="page")
     self.canvas.configure(scrollregion=(0, 0, size[0], size[1]))
     self._set_current_preprocess_status(analysis)

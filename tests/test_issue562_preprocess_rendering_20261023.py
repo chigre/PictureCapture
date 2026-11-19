@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import ast
 from dataclasses import replace
+import json
 import os
 from pathlib import Path
 import pickle
@@ -16,6 +17,7 @@ import pytest
 
 from picture_capture.preprocess import pipeline as api
 from picture_capture.preprocess import rendering
+from picture_capture.ui.preprocess_workflow import _get_preprocess_display_photo, _preprocess_analysis_for_export
 
 NAMES = ("overlay_excluded_regions", "review_image", "processed_image",
          "processed_image_with_canvas", "save_review_preview", "save_processed_page")
@@ -203,6 +205,151 @@ def test_analysis_refuses_a_same_size_replacement_before_accepting_metadata(
     monkeypatch.setattr(api, "analyze_preprocess_page", lambda *_args, **_kwargs: replace(analysis))
     with pytest.raises(OSError, match="源图已变化"):
         api.analyze_preprocess_path(page, object())
+
+
+def _change_source_without_changing_size_or_mtime(page, color):
+    replacement = page.with_stem("replacement")
+    with Image.open(page) as former:
+        with Image.new("RGB", former.size, color) as image:
+            image.save(replacement)
+    former_stat = page.stat()
+    assert replacement.stat().st_size == former_stat.st_size
+    os.utime(replacement, ns=(former_stat.st_atime_ns, former_stat.st_mtime_ns))
+    replacement.replace(page)
+
+
+def test_reopened_cache_reanalyzes_same_size_and_mtime_replacement_for_export(
+    tmp_path, monkeypatch, analysis,
+):
+    page = tmp_path / "scan.bmp"
+    with Image.new("RGB", (40, 60), "red") as image:
+        image.save(page)
+    analyzed_pixels = []
+
+    def analyze(opened, *_args, **_kwargs):
+        analyzed_pixels.append(opened.getpixel((0, 0)))
+        return replace(analysis)
+
+    monkeypatch.setattr(api, "analyze_preprocess_page", analyze)
+    options = dict(safety_margin_px=20, auto_deskew=True)
+    original = api.analyze_preprocess_path(page, object(), **options)
+    cache = api.save_analysis(tmp_path, page, original)
+    assert json.loads(cache.read_text(encoding="utf-8")) == json.loads(
+        json.dumps(original.to_dict() | {"page": page.name})
+    )
+    reopened = api.load_analysis(tmp_path, page)
+    assert api.analysis_is_current(reopened, page, **options)
+
+    _change_source_without_changing_size_or_mtime(page, "blue")
+    assert not api.analysis_is_current(reopened, page, **options)
+    assert not api.analysis_is_current(api.load_analysis(tmp_path, page), page, **options)
+    deps = SimpleNamespace(
+        preprocess_analysis_is_current=api.analysis_is_current,
+        load_preprocess_analysis=api.load_analysis,
+        load_manual_perspective_quad=api.load_manual_perspective_quad,
+        analyze_preprocess_path=api.analyze_preprocess_path,
+        save_preprocess_analysis=api.save_analysis,
+    )
+    fresh = _preprocess_analysis_for_export(
+        None, deps, SimpleNamespace(root=tmp_path), page, object(), 20, True, "auto",
+    )
+    assert analyzed_pixels == [(255, 0, 0), (0, 0, 255)]
+    destination = api.save_processed_page(page, fresh, tmp_path / "processed.png")
+    with Image.open(destination) as cropped:
+        assert cropped.getpixel((0, 0)) == (0, 0, 255)
+    assert api.analysis_is_current(api.load_analysis(tmp_path, page), page, **options)
+
+
+@pytest.mark.parametrize("output", ["processed", "preview"])
+def test_late_source_replacement_keeps_the_previously_exported_file(
+    tmp_path, monkeypatch, analysis, output,
+):
+    page = tmp_path / "scan.bmp"
+    with Image.new("RGB", (40, 60), "red") as image:
+        image.save(page)
+    monkeypatch.setattr(api, "analyze_preprocess_page", lambda *_a, **_kw: replace(analysis))
+    original = api.analyze_preprocess_path(page, object())
+    before = api.save_analysis(tmp_path, page, original).read_bytes()
+    destination = tmp_path / "existing.png"
+    destination.write_bytes(page.read_bytes())
+    previous_output = destination.read_bytes()
+    _change_source_without_changing_size_or_mtime(page, "blue")
+    with pytest.raises(OSError, match="源图已变化"):
+        api.save_analysis(tmp_path, page, original)
+    assert api.result_path(tmp_path, page).read_bytes() == before
+    exporter = api.save_processed_page if output == "processed" else api.save_review_preview
+    with pytest.raises(OSError, match="源图已变化"):
+        exporter(page, original, destination)
+    assert destination.read_bytes() == previous_output
+
+
+def test_old_or_mismatched_cache_can_be_read_but_requires_fresh_analysis(tmp_path, monkeypatch, analysis):
+    page = tmp_path / "scan.png"
+    with Image.new("RGB", (40, 60), "red") as image:
+        image.save(page)
+    cache = api.save_analysis(tmp_path, page, analysis)
+    options = dict(safety_margin_px=20, auto_deskew=True)
+    old = api.load_analysis(tmp_path, page)
+    assert old is not None and not api.analysis_is_current(old, page, **options)
+    monkeypatch.setattr(api, "analyze_preprocess_page", lambda *_a, **_kw: replace(analysis))
+    current = api.analyze_preprocess_path(page, object())
+    api.save_analysis(tmp_path, page, current)
+    assert api.analysis_is_current(api.load_analysis(tmp_path, page), page, **options)
+    payload = json.loads(cache.read_text(encoding="utf-8"))
+    payload["crop_box"][0] += 1
+    cache.write_text(json.dumps(payload), encoding="utf-8")
+    mismatched = api.load_analysis(tmp_path, page)
+    assert mismatched is not None and not api.analysis_is_current(mismatched, page, **options)
+
+
+def test_preview_uses_reanalyzed_disk_pixels_even_if_main_window_holds_old_image(
+    tmp_path, monkeypatch, analysis,
+):
+    page = tmp_path / "scan.bmp"
+    with Image.new("RGB", (40, 60), "red") as old_image:
+        old_image.save(page)
+        view = SimpleNamespace(
+            current_page=page, image=old_image, appearance_mode="light",
+            _preprocess_photo=None, _preprocess_photo_cache_key=None,
+            _preprocess_corrected_image=None, _preprocess_corrected_image_key=None,
+        )
+        monkeypatch.setattr(api, "analyze_preprocess_page", lambda *_a, **_kw: replace(analysis))
+        deps = SimpleNamespace(
+            Image=Image, ImageTk=SimpleNamespace(PhotoImage=lambda image: image),
+            themed_display_image=lambda image, _: image,
+            geometry_corrected_image=lambda image, _: image.convert("RGB"),
+            overlay_excluded_regions=lambda image, _: image,
+        )
+        original = api.analyze_preprocess_path(page, object())
+        image = _get_preprocess_display_photo(view, deps, (40, 60), original)
+        assert image.getpixel((15, 15)) == (255, 0, 0)
+        _change_source_without_changing_size_or_mtime(page, "blue")
+        fresh = api.analyze_preprocess_path(page, object())
+        image = _get_preprocess_display_photo(view, deps, (40, 60), fresh)
+        assert image.getpixel((15, 15)) == (0, 0, 255)
+
+
+@pytest.mark.parametrize("output", ["processed", "preview"])
+def test_export_encoding_failure_preserves_previous_image(tmp_path, monkeypatch, source, analysis, output):
+    page = tmp_path / "scan.png"
+    destination = tmp_path / "result.png"
+    source.save(page)
+    source.save(destination)
+    previous = destination.read_bytes()
+
+    def fail_after_writing(_image, target, **_kwargs):
+        if isinstance(target, Path):
+            target.write_bytes(b"partial image")
+        else:
+            target.write(b"partial image")
+        raise OSError("image encoder stopped")
+
+    monkeypatch.setattr(Image.Image, "save", fail_after_writing)
+    exporter = api.save_processed_page if output == "processed" else api.save_review_preview
+    with pytest.raises(OSError, match="image encoder stopped"):
+        exporter(page, analysis, destination)
+    assert destination.read_bytes() == previous
+    assert sorted(path.name for path in tmp_path.iterdir()) == ["result.png", "scan.png"]
 
 
 @pytest.mark.parametrize("size,requested,expected", [((80, 100), 10, (80, 100)),

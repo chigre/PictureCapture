@@ -3,11 +3,13 @@
 from __future__ import annotations
 
 from pathlib import Path
+from tempfile import NamedTemporaryFile
 from typing import Callable
 
 from PIL import Image, ImageDraw
 
 from .models import OutputCanvasInfo, PreprocessAnalysis
+from .persistence import open_analysis_image
 from .raster_bounds import validated_crop_box
 
 PREVIEW_YELLOW = (255, 225, 110, 94)
@@ -99,10 +101,29 @@ def processed_image_with_canvas(
     return output
 
 
+def _publish_export_image(
+    image: Image.Image, destination: Path, *, image_format: str, **options,
+) -> Path:
+    destination = Path(destination)
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    temporary = None
+    try:
+        with NamedTemporaryFile(
+            "wb", dir=destination.parent, prefix=f".{destination.name}.", suffix=".tmp", delete=False,
+        ) as output:
+            temporary = Path(output.name)
+            image.save(output, format=image_format, **options)
+        temporary.replace(destination)
+    finally:
+        if temporary is not None:
+            temporary.unlink(missing_ok=True)
+    return destination
+
+
 def save_review_preview(
     page: Path, analysis: PreprocessAnalysis, destination: Path, *, max_long_side: int = 1400, review_renderer: Callable
 ) -> Path:
-    with Image.open(page) as opened:
+    with open_analysis_image(page, analysis) as opened:
         preview = review_renderer(opened, analysis)
     scale = min(1.0, max(320, int(max_long_side)) / max(preview.size))
     if scale < 1.0:
@@ -110,10 +131,7 @@ def save_review_preview(
             (max(1, round(preview.width * scale)), max(1, round(preview.height * scale))),
             Image.Resampling.LANCZOS,
         )
-    destination = Path(destination)
-    destination.parent.mkdir(parents=True, exist_ok=True)
-    preview.save(destination, format="JPEG", quality=88, optimize=True)
-    return destination
+    return _publish_export_image(preview, destination, image_format="JPEG", quality=88, optimize=True)
 
 
 def save_processed_page(
@@ -124,15 +142,15 @@ def save_processed_page(
     canvas: OutputCanvasInfo | None = None,
     canvas_renderer: Callable,
 ) -> Path:
-    with Image.open(page) as opened:
+    with open_analysis_image(page, analysis) as opened:
         result = canvas_renderer(opened, analysis, canvas)
     destination = Path(destination)
-    destination.parent.mkdir(parents=True, exist_ok=True)
     suffix = destination.suffix.casefold()
     if suffix in {".jpg", ".jpeg"}:
-        result.save(destination, quality=95, subsampling=0)
-    elif suffix in {".tif", ".tiff"}:
-        result.save(destination, compression="tiff_lzw")
-    else:
-        result.save(destination)
-    return destination
+        return _publish_export_image(result, destination, image_format="JPEG", quality=95, subsampling=0)
+    if suffix in {".tif", ".tiff"}:
+        return _publish_export_image(result, destination, image_format="TIFF", compression="tiff_lzw")
+    image_format = Image.registered_extensions().get(suffix)
+    if image_format is None:
+        raise ValueError(f"unknown file extension: {suffix}")
+    return _publish_export_image(result, destination, image_format=image_format)

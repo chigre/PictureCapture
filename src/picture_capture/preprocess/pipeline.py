@@ -105,6 +105,7 @@ from .canvas import (
 from .persistence import (
     MANUAL_GEOMETRY_FORMAT,
     MANUAL_GEOMETRY_VERSION,
+    analysis_source_is_current,
     analyze_source_path as _analyze_source_path,
     clear_manual_perspective_quad,
     load_analysis,
@@ -1073,15 +1074,7 @@ def analysis_is_current(
     )
     if actual_quad != expected_quad:
         return False
-    try:
-        stat = page.stat()
-    except OSError:
-        return False
-    if analysis.source_size_bytes and int(stat.st_size) != int(analysis.source_size_bytes):
-        return False
-    if analysis.source_mtime_ns and int(stat.st_mtime_ns) != int(analysis.source_mtime_ns):
-        return False
-    return True
+    return analysis_source_is_current(analysis, page)
 
 
 def overlay_excluded_regions(

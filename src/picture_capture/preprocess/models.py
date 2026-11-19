@@ -2,7 +2,7 @@ from __future__ import annotations
 
 """Stable data models and serialization contract for image preprocessing."""
 
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 
 PREPROCESS_FORMAT = "picture-capture-image-preprocess"
 PREPROCESS_FORMAT_VERSION = 24
@@ -233,9 +233,13 @@ class PreprocessAnalysis:
     line_geometry_confidence: float = 0.0
     source_size_bytes: int = 0
     source_mtime_ns: int = 0
+    _source_digest: bytes | None = field(default=None, repr=False, compare=False)
+    _verified_source_stamp: tuple[int, ...] | None = field(default=None, repr=False, compare=False)
 
     def to_dict(self) -> dict:
         payload = asdict(self)
+        payload.pop("_source_digest")
+        payload.pop("_verified_source_stamp")
         payload["format"] = PREPROCESS_FORMAT
         payload["format_version"] = PREPROCESS_FORMAT_VERSION
         payload["crop_box"] = list(self.crop_box)

@@ -1227,7 +1227,7 @@ def test_preprocess_export_writes_diagnostic_json_and_summary_csv(tmp_path: Path
     assert "perspective" in text
 
 
-def test_preprocess_analysis_roundtrip_and_source_signature(tmp_path: Path) -> None:
+def test_preprocess_analysis_roundtrip_and_source_signature(tmp_path: Path, monkeypatch) -> None:
     page = tmp_path / "0001.png"
     Image.new("RGB", (120, 180), "white").save(page)
     stat = page.stat()
@@ -1266,6 +1266,8 @@ def test_preprocess_analysis_roundtrip_and_source_signature(tmp_path: Path) -> N
         source_mtime_ns=stat.st_mtime_ns,
     )
 
+    monkeypatch.setattr(image_preprocessing, "analyze_preprocess_page", lambda *_a, **_kw: analysis)
+    analysis = image_preprocessing.analyze_preprocess_path(page, AppSettings())
     save_analysis(tmp_path, page, analysis)
     loaded = load_analysis(tmp_path, page)
 

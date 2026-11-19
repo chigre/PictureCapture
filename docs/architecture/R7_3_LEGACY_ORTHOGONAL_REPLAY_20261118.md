@@ -15,6 +15,8 @@ Cache loading, raster export and coordinate mapping now validate the same saved 
 
 The same paths require exact integer crop bounds. Preview and image export check those bounds against the actual corrected raster, including UVDoc output whose dimensions can differ from the source. A refused crop leaves the source and any earlier output intact.
 
+The preprocessing cache now verifies the source even when a replacement preserves file size and modification time. A companion digest file binds the analyzed source to the existing v24 JSON. Legacy caches can still be decoded for inspection and are rebuilt before automatic reuse. The GUI preview and file exporters use the analyzed source handle, and the file exporters publish only after the image has been fully encoded.
+
 ## CI follow-up for R3 and R4.2
 
 - On the previous checkpoint, macOS Python 3.13 passed pytest but [the native focused smoke](https://github.com/chigre/PictureCapture/actions/runs/44261238290/job/134654878715) produced a PDIC conflict. The smoke created `ReviewWindow(app)` directly and left the normal `app.review_window` owner unregistered. A main autosave tick could therefore dispatch its ordinary canvas writer during the synthetic focused save. The [fixture repair](https://github.com/chigre/PictureCapture/commit/a5cb2fe072acd6a51b7f428d36e6aa27fe813adb) uses `app.open_review()` and deliberately fires the main autosave after the first publication and before callback delivery, checking exact PDIC bytes and both expected focused writes.
