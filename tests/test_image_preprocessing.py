@@ -1447,7 +1447,7 @@ def test_main_workspace_exposes_and_locks_preprocess_mode():
     assert '("顶端对齐", "居中", "底部对齐")' in menu
     assert 'app.project_footer_buttons.append(button)' in tools
     assert 'and not getattr(app, "_batch_allow_page_navigation", False)' in page_controller
-    for snippet in ("def _preprocess_mode_active(", "export_diagnostic_json(", "export_summary_csv("):
+    for snippet in ("def _preprocess_mode_active(", "publish_processed_page(", "export_summary_csv("):
         assert snippet in preprocess
     for snippet in ("def _preprocess_mode_active(", "allow_page_navigation: bool = True"):
         assert snippet in app

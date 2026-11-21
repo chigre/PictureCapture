@@ -9,6 +9,11 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 from ..preprocess.persistence import open_analysis_image
+from ..preprocess.storage import (
+    preprocess_companion_paths,
+    publish_processed_page,
+    recover_incomplete_preprocess_publications,
+)
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -1196,13 +1201,14 @@ def export_preprocess_previews(self, deps: PreprocessUiDeps) -> None:
     settings = replace(self.settings)
     safety, auto_deskew, geometry_mode = self._preprocess_config()
     output = preprocess_preview_output_root(project.root)
+    destinations = preprocess_companion_paths(output, project.images, suffix="_preview.jpg")
 
     def worker(index, _position, _total):
         page = project.images[int(index)]
         analysis = self._preprocess_analysis_for_export(
             project, page, settings, safety, auto_deskew, geometry_mode,
         )
-        destination = output / f"{page.stem}_preview.jpg"
+        destination = destinations[page]
         save_review_preview(page, analysis, destination)
         return int(index), analysis, destination
 
@@ -1224,9 +1230,6 @@ def export_preprocess_previews(self, deps: PreprocessUiDeps) -> None:
 
 def export_preprocess_images(self, deps: PreprocessUiDeps) -> None:
     replace = deps.replace
-    csv = deps.csv
-    json = deps.json
-    re = deps.re
     messagebox = deps.messagebox
     output_canvas_info = deps.output_canvas_info
     preprocess_metadata_output_root = deps.preprocess_metadata_output_root
@@ -1272,6 +1275,7 @@ def export_preprocess_images(self, deps: PreprocessUiDeps) -> None:
 
     output = preprocess_processed_output_root(project.root)
     metadata_output = preprocess_metadata_output_root(project.root)
+    diagnostics = preprocess_companion_paths(metadata_output, project.images, suffix=".preprocess.json")
 
     # Stage 1 analyzes every page before writing images. This makes it
     # possible to resolve one common batch canvas that is guaranteed to fit
@@ -1332,7 +1336,9 @@ def export_preprocess_images(self, deps: PreprocessUiDeps) -> None:
             int(index) for index, _analysis in results
         ]
 
-        def export_worker(index, _position, _total):
+        def export_worker(index, position, _total):
+            if position == 1:
+                recover_incomplete_preprocess_publications(project.root)
             page = project.images[int(index)]
             analysis = analysis_by_index[int(index)]
             canvas = output_canvas_info(
@@ -1351,43 +1357,29 @@ def export_preprocess_images(self, deps: PreprocessUiDeps) -> None:
                 align_y=align_y,
             )
             destination = output / page.name
-            save_processed_page(
-                page, analysis, destination, canvas=canvas,
+            publish_processed_page(
+                project.root, page, analysis, destination, diagnostics[page],
+                canvas=canvas, settings=settings,
+                save_image=save_processed_page, save_diagnostic=export_diagnostic_json,
             )
-            metadata_destination = (
-                metadata_output / f"{page.stem}.preprocess.json"
-            )
-            export_diagnostic_json(
-                page,
-                analysis,
-                metadata_destination,
-                output_path=destination,
-                canvas=canvas,
-                settings=settings,
-            )
-            return (
-                int(index), analysis, destination, canvas,
-                metadata_destination,
-            )
+            return int(index), analysis, destination, canvas
 
-        def exported(_done, _export_total, export_stopped, export_results, export_error):
-            if export_error is not None or self.project is not project:
+        def exported(completed, total, export_stopped, export_results, export_error):
+            if self.project is not project or not export_results:
                 return
             summary_records = []
-            for (
-                index,
-                analysis,
-                destination,
-                canvas,
-                _metadata_destination,
-            ) in sorted(export_results, key=lambda item: int(item[0])):
-                page = project.images[int(index)]
+            for index, analysis, destination, canvas in sorted(export_results, key=lambda item: item[0]):
+                page = project.images[index]
                 self._preprocess_results[page.name] = analysis
-                summary_records.append(
-                    (page, analysis, destination, canvas)
-                )
+                summary_records.append((page, analysis, destination, canvas))
             summary_path = output.parent / "preprocess_summary.csv"
             export_summary_csv(summary_records, summary_path)
+            if export_error is not None:
+                self.status_var.set(
+                    f"预处理导出在第 {completed + 1}/{total} 页失败。"
+                    f"已写入 {completed} 页的汇总：{summary_path.name}"
+                )
+                return
 
             canvas_note = ""
             if canvas_enabled:
@@ -1425,6 +1417,8 @@ def export_preprocess_images(self, deps: PreprocessUiDeps) -> None:
             )
 
         def start_export_stage() -> None:
+            if self.project is not project:
+                return
             self._start_batch_task(
                 "导出预处理图片", export_items, export_worker,
                 on_done=exported,

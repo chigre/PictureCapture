@@ -37,6 +37,8 @@ def open_project_state(cls: type[Any], root: Path, *, deps: dict[str, Any]) -> A
     # An uncommitted transaction is rolled back; committed ones finish cleanup.
     from ..crop.publish import recover_incomplete_crop_publications
     recover_incomplete_crop_publications(root)
+    from ..preprocess.storage import recover_incomplete_preprocess_publications
+    recover_incomplete_preprocess_publications(root)
     json_settings = active_settings_path(root)
     if json_settings.exists():
         settings = deps["AppSettings"].from_json(json_settings)
