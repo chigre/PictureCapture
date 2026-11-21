@@ -72,6 +72,12 @@ def analysis_source_is_current(analysis: PreprocessAnalysis, page: Path) -> bool
     return True
 
 
+def check_analysis_source_current(analysis: PreprocessAnalysis, page: Path) -> None:
+    """Reject a stale disk-backed analysis at the point of publication."""
+    if analysis._source_digest is not None and not analysis_source_is_current(analysis, page):
+        raise OSError("预处理期间源图已变化，请重新分析")
+
+
 @contextmanager
 def open_analysis_image(page: Path, analysis: PreprocessAnalysis) -> Iterator[Image.Image]:
     """Decode from the verified handle and check for replacement before export."""
@@ -90,10 +96,18 @@ def open_analysis_image(page: Path, analysis: PreprocessAnalysis) -> Iterator[Im
     _check_current_path(page, stamp)
 
 
-def result_path(project_root: Path, page: Path) -> Path:
+def _page_artifact_paths(
+    project_root: Path, page: Path, filename: str, legacy_suffix: str,
+) -> tuple[Path, Path]:
     root = image_preprocess_data_root(project_root)
-    root.mkdir(parents=True, exist_ok=True)
-    return root / f"{Path(page).stem}.json"
+    page = Path(page)
+    return root / "by-source" / page.name / filename, root / f"{page.stem}{legacy_suffix}"
+
+
+def result_path(project_root: Path, page: Path) -> Path:
+    path, _legacy = _page_artifact_paths(project_root, page, "analysis.json", ".json")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    return path
 
 
 def save_analysis(project_root: Path, page: Path, analysis: PreprocessAnalysis) -> Path:
@@ -101,8 +115,7 @@ def save_analysis(project_root: Path, page: Path, analysis: PreprocessAnalysis) 
     payload = analysis.to_dict()
     payload["page"] = Path(page).name
     content = json.dumps(payload, ensure_ascii=False, indent=2) + "\n"
-    if analysis._source_digest is not None and not analysis_source_is_current(analysis, page):
-        raise OSError("预处理期间源图已变化，请重新分析")
+    check_analysis_source_current(analysis, page)
     write_text_atomic(path, content)
     if analysis._source_digest is not None:
         # The separate proof binds both files. An interrupted or concurrent
@@ -116,15 +129,14 @@ def save_analysis(project_root: Path, page: Path, analysis: PreprocessAnalysis) 
 
 
 def load_analysis(project_root: Path, page: Path) -> PreprocessAnalysis | None:
-    path = result_path(project_root, page)
-    if not path.is_file():
-        return None
+    current, legacy = _page_artifact_paths(project_root, page, "analysis.json", ".json")
+    path = current if current.is_file() else legacy
     try:
         content = path.read_text(encoding="utf-8")
         payload = json.loads(content)
-        analysis = PreprocessAnalysis.from_dict(payload)
-        if payload.get("page", Path(page).name) != Path(page).name:
+        if not isinstance(payload, dict) or payload.get("page", Path(page).name) != Path(page).name:
             return None
+        analysis = PreprocessAnalysis.from_dict(payload)
     except (OSError, ValueError, TypeError, OverflowError):
         return None
     try:
@@ -142,30 +154,39 @@ MANUAL_GEOMETRY_VERSION = 1
 
 
 def manual_geometry_path(project_root: Path, page: Path) -> Path:
-    root = image_preprocess_data_root(project_root)
-    root.mkdir(parents=True, exist_ok=True)
-    return root / f"{Path(page).stem}.geometry.json"
+    path, _legacy = _page_artifact_paths(project_root, page, "geometry.json", ".geometry.json")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    return path
+
+
+def _manual_geometry_payload(path: Path, page: Path) -> dict | None:
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        if (
+            isinstance(payload, dict)
+            and payload.get("format") == MANUAL_GEOMETRY_FORMAT
+            and int(payload.get("version", 0) or 0) == MANUAL_GEOMETRY_VERSION
+            and payload.get("page") == Path(page).name
+        ):
+            return payload
+    except (FileNotFoundError, ValueError, TypeError, OverflowError):
+        pass
+    return None
 
 
 def load_manual_perspective_quad(
     project_root: Path, page: Path,
 ) -> tuple[float, ...] | None:
-    path = manual_geometry_path(project_root, page)
-    if not path.is_file():
-        return None
+    current, legacy = _page_artifact_paths(project_root, page, "geometry.json", ".geometry.json")
+    path = current if current.is_file() else legacy
     try:
-        payload = json.loads(path.read_text(encoding="utf-8"))
-        if (
-            payload.get("format") != MANUAL_GEOMETRY_FORMAT
-            or int(payload.get("version", 0) or 0) != MANUAL_GEOMETRY_VERSION
-        ):
-            return None
-        values = payload.get("quad")
+        payload = _manual_geometry_payload(path, page)
+        values = payload.get("quad") if payload is not None else None
         if not isinstance(values, (list, tuple)) or len(values) != 8:
             return None
         quad = tuple(float(v) for v in values)
         return quad if all(math.isfinite(v) for v in quad) else None
-    except (OSError, ValueError, TypeError, json.JSONDecodeError):
+    except (OSError, ValueError, TypeError, OverflowError):
         return None
 
 
@@ -184,18 +205,14 @@ def save_manual_perspective_quad(
         "page": Path(page).name,
         "quad": list(values),
     }
-    temporary = path.with_suffix(path.suffix + ".tmp")
-    temporary.write_text(
-        json.dumps(payload, ensure_ascii=False, indent=2) + "\n",
-        encoding="utf-8",
-    )
-    temporary.replace(path)
+    write_text_atomic(path, json.dumps(payload, ensure_ascii=False, indent=2) + "\n")
     return path
 
 
 def clear_manual_perspective_quad(project_root: Path, page: Path) -> None:
-    path = manual_geometry_path(project_root, page)
-    try:
-        path.unlink()
-    except FileNotFoundError:
-        pass
+    current, legacy = _page_artifact_paths(project_root, page, "geometry.json", ".geometry.json")
+    # Remove the matching legacy record first so it cannot show up again
+    # when the current page-specific file has been deleted.
+    if _manual_geometry_payload(legacy, page) is not None:
+        legacy.unlink(missing_ok=True)
+    current.unlink(missing_ok=True)

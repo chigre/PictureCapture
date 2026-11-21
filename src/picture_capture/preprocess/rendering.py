@@ -9,7 +9,7 @@ from typing import Callable
 from PIL import Image, ImageDraw
 
 from .models import OutputCanvasInfo, PreprocessAnalysis
-from .persistence import open_analysis_image
+from .persistence import check_analysis_source_current, open_analysis_image
 from .raster_bounds import validated_crop_box
 
 PREVIEW_YELLOW = (255, 225, 110, 94)
@@ -102,7 +102,8 @@ def processed_image_with_canvas(
 
 
 def _publish_export_image(
-    image: Image.Image, destination: Path, *, image_format: str, **options,
+    image: Image.Image, destination: Path, *,
+    page: Path, analysis: PreprocessAnalysis, image_format: str, **options,
 ) -> Path:
     destination = Path(destination)
     destination.parent.mkdir(parents=True, exist_ok=True)
@@ -113,6 +114,7 @@ def _publish_export_image(
         ) as output:
             temporary = Path(output.name)
             image.save(output, format=image_format, **options)
+        check_analysis_source_current(analysis, page)
         temporary.replace(destination)
     finally:
         if temporary is not None:
@@ -131,7 +133,10 @@ def save_review_preview(
             (max(1, round(preview.width * scale)), max(1, round(preview.height * scale))),
             Image.Resampling.LANCZOS,
         )
-    return _publish_export_image(preview, destination, image_format="JPEG", quality=88, optimize=True)
+    return _publish_export_image(
+        preview, destination, page=page, analysis=analysis,
+        image_format="JPEG", quality=88, optimize=True,
+    )
 
 
 def save_processed_page(
@@ -147,10 +152,13 @@ def save_processed_page(
     destination = Path(destination)
     suffix = destination.suffix.casefold()
     if suffix in {".jpg", ".jpeg"}:
-        return _publish_export_image(result, destination, image_format="JPEG", quality=95, subsampling=0)
-    if suffix in {".tif", ".tiff"}:
-        return _publish_export_image(result, destination, image_format="TIFF", compression="tiff_lzw")
-    image_format = Image.registered_extensions().get(suffix)
+        image_format, options = "JPEG", {"quality": 95, "subsampling": 0}
+    elif suffix in {".tif", ".tiff"}:
+        image_format, options = "TIFF", {"compression": "tiff_lzw"}
+    else:
+        image_format, options = Image.registered_extensions().get(suffix), {}
     if image_format is None:
         raise ValueError(f"unknown file extension: {suffix}")
-    return _publish_export_image(result, destination, image_format=image_format)
+    return _publish_export_image(
+        result, destination, page=page, analysis=analysis, image_format=image_format, **options,
+    )

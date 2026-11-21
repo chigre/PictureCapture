@@ -378,3 +378,68 @@ def test_save_uses_current_canvas_renderer(tmp_path, monkeypatch, analysis):
     with Image.open(target) as output:
         assert output.size == (7, 9) and output.getpixel((0, 0)) == (0, 0, 255)
     assert calls == [(analysis, canvas)]
+
+
+def test_same_stem_analyses_reopen_with_independent_fingerprints(tmp_path, monkeypatch, analysis):
+    from picture_capture.persistence.project_storage import image_preprocess_data_root
+
+    first = tmp_path / "001.bmp"
+    second = tmp_path / "001.png"
+    with Image.new("RGB", (40, 60), "red") as image:
+        image.save(first)
+    with Image.new("RGB", (40, 60), "blue") as image:
+        image.save(second)
+    monkeypatch.setattr(api, "analyze_preprocess_page", lambda *_a, **_kw: replace(analysis))
+    options = dict(safety_margin_px=20, auto_deskew=True)
+    first_analysis = api.analyze_preprocess_path(first, object(), **options)
+    first_cache = api.save_analysis(tmp_path, first, first_analysis)
+    legacy = image_preprocess_data_root(tmp_path) / "001.json"
+    first_cache.replace(legacy)
+    first_cache.with_suffix(".source.sha256").replace(legacy.with_suffix(".source.sha256"))
+
+    assert api.analysis_is_current(api.load_analysis(tmp_path, first), first, **options)
+    assert api.load_analysis(tmp_path, second) is None
+    second_analysis = api.analyze_preprocess_path(second, object(), **options)
+    second_cache = api.save_analysis(tmp_path, second, second_analysis)
+    api.save_analysis(tmp_path, first, first_analysis)
+    assert first_cache != second_cache
+    assert api.analysis_is_current(api.load_analysis(tmp_path, first), first, **options)
+    assert api.analysis_is_current(api.load_analysis(tmp_path, second), second, **options)
+
+
+@pytest.mark.parametrize("record", ["[]", "null", '{"page":"other.png"}'])
+def test_malformed_manual_geometry_record_is_ignored(tmp_path, record):
+    page = tmp_path / "001.png"
+    path = api.manual_geometry_path(tmp_path, page)
+    path.write_text(record, encoding="utf-8")
+    assert api.load_manual_perspective_quad(tmp_path, page) is None
+    api.clear_manual_perspective_quad(tmp_path, page)
+    assert not path.exists()
+
+
+@pytest.mark.parametrize("output", ["processed", "preview"])
+def test_source_replaced_during_encoding_keeps_previous_image(tmp_path, monkeypatch, analysis, output):
+    page = tmp_path / "scan.bmp"
+    replacement = tmp_path / "replacement.bmp"
+    destination = tmp_path / ("result.png" if output == "processed" else "result.jpg")
+    for path, color in ((page, "red"), (replacement, "blue"), (destination, "green")):
+        with Image.new("RGB", (40, 60), color) as image:
+            image.save(path)
+    previous = destination.read_bytes()
+    metadata = page.stat()
+    assert metadata.st_size == replacement.stat().st_size
+    os.utime(replacement, ns=(metadata.st_atime_ns, metadata.st_mtime_ns))
+    monkeypatch.setattr(api, "analyze_preprocess_page", lambda *_a, **_kw: replace(analysis))
+    state = api.analyze_preprocess_path(page, object())
+    save = Image.Image.save
+
+    def replace_source_after_encoding(image, target, **kwargs):
+        save(image, target, **kwargs)
+        replacement.replace(page)
+
+    monkeypatch.setattr(Image.Image, "save", replace_source_after_encoding)
+    exporter = api.save_processed_page if output == "processed" else api.save_review_preview
+    with pytest.raises(OSError, match="源图已变化"):
+        exporter(page, state, destination)
+    assert destination.read_bytes() == previous
+    assert sorted(path.name for path in tmp_path.iterdir()) == [destination.name, page.name]

@@ -11,7 +11,7 @@ import subprocess
 import sys
 from types import SimpleNamespace
 
-from PIL import Image
+from PIL import Image, ImageDraw
 import pytest
 
 from picture_capture import app as app_module
@@ -316,14 +316,14 @@ publish_processed_page(
 def test_export_summary_replace_failure_preserves_prior_csv(tmp_path, monkeypatch):
     destination = tmp_path / "preprocess_summary.csv"
     destination.write_bytes(b"previous summary")
-    real_replace = os.replace
+    real_replace = Path.replace
 
     def fail_summary(source, target):
         if Path(target) == destination:
             raise PermissionError("summary is locked")
         return real_replace(source, target)
 
-    monkeypatch.setattr(os, "replace", fail_summary)
+    monkeypatch.setattr(Path, "replace", fail_summary)
     with pytest.raises(PermissionError, match="summary is locked"):
         export_summary_csv([], destination)
     assert destination.read_bytes() == b"previous summary"
@@ -435,3 +435,48 @@ def test_committed_pair_counts_even_if_cleanup_waits_for_reopen(tmp_path, monkey
     assert _pixel(image) == (0, 0, 255)
     assert not list(root.rglob("*.bak"))
     assert not list(root.rglob(".preprocess-publish-*.json"))
+
+
+def test_manual_corners_are_owned_by_the_exact_page_after_reopen_and_reset(tmp_path):
+    from picture_capture.persistence.project_storage import image_preprocess_data_root
+
+    first, second = tmp_path / "001.bmp", tmp_path / "001.png"
+    for page in (first, second):
+        with Image.new("RGB", (80, 120), "white") as image:
+            draw = ImageDraw.Draw(image)
+            for y in (30, 48, 66, 84):
+                draw.rectangle((18, y, 60, y + 5), fill="black")
+            image.save(page)
+    project = ProjectState.open(tmp_path)
+    first_quad = (3.0, 3.0, 75.0, 5.0, 74.0, 113.0, 3.0, 116.0)
+    second_quad = (6.0, 6.0, 70.0, 6.0, 70.0, 110.0, 6.0, 110.0)
+    first_path = app_module.save_manual_perspective_quad(project.root, first, first_quad)
+    legacy = image_preprocess_data_root(project.root) / "001.geometry.json"
+    first_path.replace(legacy)
+
+    project = ProjectState.open(tmp_path)
+    assert app_module.load_manual_perspective_quad(project.root, first) == first_quad
+    assert app_module.load_manual_perspective_quad(project.root, second) is None
+    app_module.save_manual_perspective_quad(project.root, second, second_quad)
+    project = ProjectState.open(tmp_path)
+    assert app_module.load_manual_perspective_quad(project.root, first) == first_quad
+    assert app_module.load_manual_perspective_quad(project.root, second) == second_quad
+
+    view, run_batch, idle, _tasks = _export_view(project)
+    app_module.PictureCaptureApp.export_preprocess_images(view)
+    assert run_batch() is None
+    idle.pop(0)()
+    assert run_batch() is None
+    output = app_module.preprocess_metadata_output_root(project.root) / "by-source"
+    for page, quad in ((first, first_quad), (second, second_quad)):
+        diagnostic = json.loads((output / f"{page.name}.preprocess.json").read_text(encoding="utf-8"))
+        assert diagnostic["manual_perspective_quad"] == list(quad)
+
+    app_module.clear_manual_perspective_quad(project.root, second)
+    assert legacy.is_file()
+    assert app_module.load_manual_perspective_quad(project.root, second) is None
+    app_module.save_manual_perspective_quad(project.root, first, second_quad)
+    assert app_module.load_manual_perspective_quad(project.root, first) == second_quad
+    app_module.clear_manual_perspective_quad(project.root, first)
+    assert not legacy.exists()
+    assert app_module.load_manual_perspective_quad(ProjectState.open(tmp_path).root, first) is None

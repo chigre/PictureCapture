@@ -13,7 +13,7 @@ from PIL import Image
 from ..persistence.file_lock import exclusive_file_lock
 from ..persistence.file_publication import publish_file_transaction, recover_journal
 from ..persistence.project_storage import image_preprocess_output_root
-from .persistence import analysis_source_is_current
+from .persistence import check_analysis_source_current
 
 if TYPE_CHECKING:
     from ..models import AppSettings
@@ -112,8 +112,7 @@ def publish_processed_page(
                     raise OSError(f"预处理导出目标不是普通文件：{target}")
             # Rendering and diagnostic serialization may take time. Check the
             # source again before replacing either published file.
-            if analysis._source_digest is not None and not analysis_source_is_current(analysis, page):
-                raise OSError("预处理期间源图已变化，请重新分析")
+            check_analysis_source_current(analysis, page)
             publish_file_transaction(
                 [(staged_image, image_path), (staged_diagnostic, diagnostic_path)],
                 namespace="preprocess",
