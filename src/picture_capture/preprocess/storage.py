@@ -2,13 +2,22 @@ from __future__ import annotations
 
 """Filesystem roots and transactional promotion for preprocessing outputs."""
 
+from collections import Counter
 import shutil
 from pathlib import Path
-from typing import Iterable
+from typing import TYPE_CHECKING, Callable, ContextManager, Iterable
+from uuid import uuid4
 
 from PIL import Image
 
+from ..persistence.file_lock import exclusive_file_lock
+from ..persistence.file_publication import publish_file_transaction, recover_journal
 from ..persistence.project_storage import image_preprocess_output_root
+from .persistence import check_analysis_source_current
+
+if TYPE_CHECKING:
+    from ..models import AppSettings
+    from .models import OutputCanvasInfo, PreprocessAnalysis
 
 
 def preview_output_root(project_root: Path) -> Path:
@@ -21,6 +30,99 @@ def processed_output_root(project_root: Path) -> Path:
     path = image_preprocess_output_root(project_root) / "processed"
     path.mkdir(parents=True, exist_ok=True)
     return path
+
+
+def preprocess_companion_paths(
+    output: Path, pages: Iterable[Path], *, suffix: str,
+) -> dict[Path, Path]:
+    """Preserve established names and distinguish pages sharing a stem."""
+    pages = list(pages)
+    stems = Counter(page.stem.casefold() for page in pages)
+    return {
+        page: (
+            output / "by-source" / f"{page.name}{suffix}"
+            if stems[page.stem.casefold()] > 1 else output / f"{page.stem}{suffix}"
+        )
+        for page in pages
+    }
+
+
+def _journal_directory(output_root: Path) -> Path:
+    directory = output_root / ".preprocess-publications"
+    if not directory.resolve().is_relative_to(output_root.resolve()):
+        raise ValueError(f"预处理恢复目录不在输出目录内：{directory}")
+    return directory
+
+
+def _publication_lock(directory: Path) -> ContextManager[None]:
+    return exclusive_file_lock(
+        directory / "publish.lock",
+        busy_message="预处理导出正在由其他进程发布",
+    )
+
+
+def _recover_publications(directory: Path, output_root: Path) -> None:
+    for state in ("pending", "committed"):
+        for journal in sorted(directory.glob(f".preprocess-publish-*.{state}.json")):
+            recover_journal(journal, allowed_root=output_root)
+
+
+def recover_incomplete_preprocess_publications(project_root: Path) -> None:
+    """Repair a previous interrupted export before a project is used."""
+    output_root = image_preprocess_output_root(project_root, create=False)
+    directory = _journal_directory(output_root)
+    if not any(directory.glob(".preprocess-publish-*.json")):
+        return
+    with _publication_lock(directory):
+        _recover_publications(directory, output_root)
+
+
+def publish_processed_page(
+    project_root: Path,
+    page: Path,
+    analysis: PreprocessAnalysis,
+    image_path: Path,
+    diagnostic_path: Path,
+    *,
+    canvas: OutputCanvasInfo,
+    settings: AppSettings,
+    save_image: Callable,
+    save_diagnostic: Callable,
+) -> None:
+    """Publish the rendered image and its diagnostic as one recoverable page."""
+    output_root = image_preprocess_output_root(project_root, create=False)
+    directory = _journal_directory(output_root)
+    boundary = output_root.resolve()
+    for target in (image_path, diagnostic_path):
+        if not target.parent.resolve().is_relative_to(boundary):
+            raise ValueError(f"预处理导出文件不在输出目录内：{target}")
+    token = uuid4().hex
+    staged_image = image_path.with_name(f".preprocess-image-{token}{image_path.suffix}")
+    staged_diagnostic = diagnostic_path.with_name(f".preprocess-report-{token}.json")
+    try:
+        save_image(page, analysis, staged_image, canvas=canvas)
+        save_diagnostic(
+            page, analysis, staged_diagnostic, output_path=image_path,
+            canvas=canvas, settings=settings,
+        )
+        with _publication_lock(directory):
+            _recover_publications(directory, output_root)
+            for target in (image_path, diagnostic_path):
+                if target.is_symlink() or (target.exists() and not target.is_file()):
+                    raise OSError(f"预处理导出目标不是普通文件：{target}")
+            # Rendering and diagnostic serialization may take time. Check the
+            # source again before replacing either published file.
+            check_analysis_source_current(analysis, page)
+            publish_file_transaction(
+                [(staged_image, image_path), (staged_diagnostic, diagnostic_path)],
+                namespace="preprocess",
+                rollback_failure="预处理导出失败，且回滚旧文件时发生错误；已保留隐藏 .bak 恢复副本。",
+                journal_directory=directory,
+                defer_committed_cleanup=True,
+            )
+    finally:
+        staged_image.unlink(missing_ok=True)
+        staged_diagnostic.unlink(missing_ok=True)
 
 
 def promote_processed_pages(
@@ -48,6 +150,7 @@ def promote_processed_pages(
         if not page.is_file():
             raise FileNotFoundError(page)
 
+    recover_incomplete_preprocess_publications(root)
     processed_root = processed_output_root(root)
     missing = [
         page.name

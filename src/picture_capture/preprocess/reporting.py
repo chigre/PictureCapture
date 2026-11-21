@@ -9,8 +9,10 @@ They intentionally do not participate in page analysis or geometry mutation.
 import csv
 import json
 from pathlib import Path
+from tempfile import NamedTemporaryFile
 from typing import TYPE_CHECKING, Callable, Iterable
 
+from ..io.formats import write_text_atomic
 from .constants import (
     AUTO_HOMOGRAPHY_ANISOTROPY_P95_MAX,
     AUTO_HOMOGRAPHY_AREA_SCALE_SPAN_MAX,
@@ -513,12 +515,20 @@ def export_summary_csv(
     fieldnames = list(rows[0].keys()) if rows else [
         "page", "status", "confidence", "warnings", "output_filename"
     ]
-    temporary = destination.with_suffix(destination.suffix + ".tmp")
-    with temporary.open("w", encoding="utf-8-sig", newline="") as stream:
-        writer = csv.DictWriter(stream, fieldnames=fieldnames)
-        writer.writeheader()
-        writer.writerows(rows)
-    temporary.replace(destination)
+    temporary = None
+    try:
+        with NamedTemporaryFile(
+            "w", encoding="utf-8-sig", newline="", dir=destination.parent,
+            prefix=".preprocess-summary-", suffix=".tmp", delete=False,
+        ) as stream:
+            temporary = Path(stream.name)
+            writer = csv.DictWriter(stream, fieldnames=fieldnames)
+            writer.writeheader()
+            writer.writerows(rows)
+        temporary.replace(destination)
+    finally:
+        if temporary is not None:
+            temporary.unlink(missing_ok=True)
     return destination
 
 
@@ -853,12 +863,6 @@ def _export_diagnostic_json_impl(
         ),
     }
     destination = Path(destination)
-    destination.parent.mkdir(parents=True, exist_ok=True)
-    temporary = destination.with_suffix(destination.suffix + ".tmp")
-    temporary.write_text(
-        json.dumps(payload, ensure_ascii=False, indent=2) + "\n",
-        encoding="utf-8",
-    )
-    temporary.replace(destination)
+    write_text_atomic(destination, json.dumps(payload, ensure_ascii=False, indent=2) + "\n")
     return destination
 

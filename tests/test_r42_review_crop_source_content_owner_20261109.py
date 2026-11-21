@@ -1,0 +1,161 @@
+"""R4.2 synthetic crop callback ownership after in-place source image replacement.
+
+Only temporary synthetic BMP pixels; no real scan, OCR, Tk root or saved project.
+"""
+from dataclasses import dataclass, replace
+import os
+from pathlib import Path
+from types import SimpleNamespace
+
+import pytest
+from PIL import Image
+from picture_capture.ui import review_workspace_workflow as flow
+
+
+@dataclass
+class Entry:
+    word: str = "synthetic"
+    x: int = 12
+    y: int = 34
+
+
+@dataclass
+class Settings:
+    review_zoom_percent: int = 100
+
+
+def _normalize_and_notify(opened, after_read):
+    # Capture pixels from the already-opened image before the path is replaced.
+    pixels = opened.convert("RGB")
+    if after_read is not None:
+        after_read()
+    return pixels
+
+
+def _start(page: Path, *, after_read=None):
+    row = Entry()
+    callbacks, rendered, retried, errors = [], [], [], []
+    parent = SimpleNamespace(
+        project=object(), current_page=page, current_index=0, image=object(),
+        settings=Settings(), canvas=SimpleNamespace(winfo_width=lambda: 800),
+        _ordered_entries_reading_order=lambda: [row],
+        _start_ui_worker=lambda key, work, done, fail: callbacks.append((work, done, fail)),
+        status_var=SimpleNamespace(set=errors.append),
+    )
+    review = SimpleNamespace(
+        parent=parent, vars=[SimpleNamespace(get=lambda: "synthetic")],
+        row_entries=[row], active_index=0, _filter_rows_active=False,
+        review_zoom_auto=False, review_zoom=1.0, _prefetch_closed=False,
+        _review_render_worker_key="source-content-worker",
+        _bound_row_entries=lambda: [row], _review_image_area_width=lambda: 700,
+        winfo_exists=lambda: True, render_rows=lambda **kw: rendered.append(kw),
+        _request_render_rows=lambda **kw: retried.append(kw), editors=[],
+        rows=SimpleNamespace(winfo_children=lambda: [object()]),
+    )
+    deps = SimpleNamespace(
+        ttk=SimpleNamespace(), tk=SimpleNamespace(TclError=RuntimeError),
+        Image=Image, _format_layout_percent=str,
+        _review_crop_context=lambda *a: (None, object()),
+        _review_line_box=lambda *a, **kw: (0, 0, 12, 12),
+        sync_review_entry_classification=lambda *_: None,
+        normalize_page_rgb=lambda opened: _normalize_and_notify(opened, after_read),
+        review_auto_fit_zoom=lambda *a: 1.0, replace=replace,
+    )
+    flow._request_render_rows(review, deps, focus_index=0)
+    assert len(callbacks) == 1
+    # Execute the real crop worker against the original red synthetic image.
+    payload = callbacks[0][0]()
+    assert payload[0][0].getpixel((0, 0)) == (255, 0, 0)
+    def deliver():
+        callbacks[0][1](payload)
+    return rendered, retried, deliver, callbacks, errors
+
+
+def _write_bmp(page: Path, rgb):
+    Image.new("RGB", (12, 12), rgb).save(page, format="BMP")
+
+
+def _deliver_worker(callback):
+    work, done, failed = callback
+    try:
+        payload = work()
+    except OSError as exc:
+        failed(exc, "")
+    else:
+        done(payload)
+
+
+def test_same_path_same_size_same_mtime_changed_pixels_reject_old_crop(tmp_path):
+    page = tmp_path / "page.bmp"
+    _write_bmp(page, (255, 0, 0))
+    original = page.read_bytes()
+    stamp = page.stat()
+    rendered, retried, deliver, callbacks, errors = _start(page)
+    _write_bmp(page, (0, 0, 255))
+    os.utime(page, ns=(stamp.st_atime_ns, stamp.st_mtime_ns))
+    assert page.read_bytes() != original
+    assert page.stat().st_size == stamp.st_size
+    assert page.stat().st_mtime_ns == stamp.st_mtime_ns
+    deliver()
+    assert not rendered, "crop was rendered before verification"
+    assert len(callbacks) == 2
+    _deliver_worker(callbacks[1])
+    assert not rendered, "old crop pixels were painted after source content changed"
+    assert errors and not retried
+
+
+def test_same_path_unchanged_pixels_accept_crop(tmp_path):
+    page = tmp_path / "page.bmp"
+    _write_bmp(page, (255, 0, 0))
+    rendered, retried, deliver, callbacks, errors = _start(page)
+    deliver()
+    assert len(callbacks) == 2, "crop must be verified asynchronously before rendering"
+    assert not rendered, "unverified crop was painted"
+    verification_payload = callbacks[1][0]()
+    callbacks[1][1](verification_payload)
+    assert len(rendered) == 1, "unchanged source must render after verification"
+    assert not retried and not errors
+
+
+def test_source_replaced_while_worker_is_cropping_reject_old_pixels(tmp_path):
+    page = tmp_path / "page.bmp"
+    _write_bmp(page, (255, 0, 0))
+    original = page.read_bytes()
+    stamp = page.stat()
+
+    def replace_during_worker():
+        # Worker has read red pixels; mutate the same path before crop finishes.
+        _write_bmp(page, (0, 0, 255))
+        os.utime(page, ns=(stamp.st_atime_ns, stamp.st_mtime_ns))
+
+    rendered, retried, deliver, callbacks, errors = _start(page, after_read=replace_during_worker)
+    assert page.read_bytes() != original
+    assert page.stat().st_size == stamp.st_size
+    assert page.stat().st_mtime_ns == stamp.st_mtime_ns
+    deliver()
+    assert not rendered, "crop was rendered before verification"
+    assert len(callbacks) == 2
+    _deliver_worker(callbacks[1])
+    assert not rendered, "worker crop from pre-replacement pixels was painted"
+    assert errors and not retried
+
+
+@pytest.mark.parametrize("stable_metadata", [False, True])
+def test_verification_worker_rechecks_source_after_its_own_read(tmp_path, monkeypatch, stable_metadata):
+    """A second async content check must not authorize an obsolete crop."""
+    if stable_metadata:
+        # Some filesystems expose equal metadata across a rewrite and mtime reset.
+        monkeypatch.setattr(flow, "source_file_stamp", lambda stream: (1, 2, 486, 3, 4))
+    page = tmp_path / "page.bmp"
+    _write_bmp(page, (255, 0, 0))
+    stamp = page.stat()
+    rendered, retried, deliver, callbacks, errors = _start(page)
+    deliver()
+    assert len(callbacks) == 2, "crop callback must schedule nonblocking source verification"
+    assert not rendered, "crop was rendered before asynchronous verification"
+    verification_payload = callbacks[1][0]()
+    _write_bmp(page, (0, 0, 255))
+    os.utime(page, ns=(stamp.st_atime_ns, stamp.st_mtime_ns))
+    callbacks[1][1](verification_payload)
+    assert not rendered, "source changed after verification read; stale crop was rendered"
+    assert errors and not retried

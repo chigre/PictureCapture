@@ -10,6 +10,19 @@ import tkinter as tk
 from typing import Any
 
 
+def focused_review_save_pending(review: Any) -> bool:
+    """Whether focused proofreading still owns unconfirmed changes."""
+    return bool(
+        getattr(review, "_filter_rows_active", False)
+        and (
+            getattr(review, "_filter_save_running", False)
+            or getattr(review, "_filter_pending_changes", None)
+            or getattr(review, "_filter_save_uncertain_pages", None)
+            or getattr(review, "_filter_save_launch_failed", False)
+        )
+    )
+
+
 def _live_review(app: Any) -> Any | None:
     review = getattr(app, "review_window", None)
     if review is None:
@@ -23,21 +36,37 @@ def _live_review(app: Any) -> Any | None:
     return None
 
 
-def save_review_before_page_change(app: Any, index: int, *, already_saved: bool = False) -> bool:
+def save_review_before_page_change(app: Any, index: int, *, already_saved: bool = False) -> bool | None:
     """Persist old-page edits, avoiding stale row-to-new-page misalignment.
 
-    Return True if the review owned the page commit; callers must not resync
-    the main canvas' potentially stale inline text over those edits.
+    Return True if the review committed, False if no review save was needed,
+    and None when ReviewWindow explicitly refused to save. A refused save
+    MUST NOT allow navigation or stale main-canvas editor synchronization.
     """
     review = _live_review(app)
     page = getattr(app, "current_page", None)
-    if (
-        review is None or already_saved or page is None
-        or getattr(review, "_filter_rows_active", False)
-        or getattr(review, "_rendered_page_stem", None) != page.stem
-    ):
+    if review is None or already_saved or page is None:
         return False
-    review.save(redraw_main=False)
+    if getattr(review, "_filter_rows_active", False):
+        if (
+            getattr(review, "_filter_save_uncertain_pages", None)
+            or getattr(review, "_filter_save_launch_failed", False)
+        ):
+            app.status_var.set("筛选校对保存状态未确认；请核对 PDIC 后显式重试，再切换页面。")
+            return None
+        # Filtered rows span multiple pages, so a rendered-page-stem check
+        # cannot prove that their background save has finished. Explicitly
+        # fence a pending/running filtered save before changing main pages.
+        if review.save(redraw_main=False) is False:
+            return None
+        # Keep the existing main canvas save/sync responsibility when no
+        # filtered work is outstanding; do not pretend to own single-page
+        # rendered rows from a cross-page filter.
+        return False
+    if getattr(review, "_rendered_page_stem", None) != page.stem:
+        return False
+    if review.save(redraw_main=False) is False:
+        return None
     return True
 
 
@@ -68,7 +97,7 @@ def refresh_review_after_page_change(app: Any, preloaded: dict | None = None) ->
             and preloaded.get("review_key") == review._review_prefetch_key()
         ):
             crops = preloaded.get("review_crops")
-        if crops is not None and len(crops) >= len(app.entries):
+        if crops is not None and len(crops) == len(app.entries):
             review.render_rows(preloaded_crops=list(crops))
         else:
             review._request_render_rows(focus_index=0, reset_scroll=True)

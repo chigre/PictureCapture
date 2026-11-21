@@ -148,10 +148,11 @@ def image_preprocess_data_root(project_root: Path) -> Path:
     return path
 
 
-def image_preprocess_output_root(project_root: Path) -> Path:
+def image_preprocess_output_root(project_root: Path, *, create: bool = True) -> Path:
     """Generated review previews and processed page images."""
     path = output_root(project_root) / "ImagePreprocess"
-    path.mkdir(parents=True, exist_ok=True)
+    if create:
+        path.mkdir(parents=True, exist_ok=True)
     return path
 
 

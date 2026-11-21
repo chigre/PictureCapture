@@ -14,7 +14,7 @@ from dataclasses import replace
 from datetime import datetime
 from pathlib import Path
 from tkinter import filedialog, messagebox
-from typing import Any
+from typing import Any, TextIO
 
 from PIL import Image
 
@@ -54,6 +54,24 @@ def _training_scope_label(app: Any, indices: list[int]) -> str:
         )
         return f"指定：{spec or (first_name + ' → ' + last_name)}"
     return f"{first_name} → {last_name}"
+
+
+def _finish_text_export(
+    stream: TextIO | None, temp: Path, target: Path, *, publish: bool,
+) -> None:
+    """Close the stream successfully before publishing the complete export."""
+    try:
+        if stream is not None:
+            stream.close()
+        if publish:
+            if stream is None:
+                temp.write_text("", encoding="utf-8")
+            os.replace(temp, target)
+    finally:
+        try:
+            temp.unlink(missing_ok=True)
+        except OSError:
+            pass
 
 
 class ExportController:
@@ -331,9 +349,7 @@ class ExportController:
             app.status_var.set("所选范围没有已有 PDIC 文件")
             return
         try:
-            app._flush_deferred_page_save()
-            app._sync_entry_editor_texts()
-            app.save_pdic(silent=True, sync_editors=False)
+            app.save_pdic(silent=True)
         except Exception as exc:
             app.show_error("修复排序准备失败", exc)
             return
@@ -409,9 +425,7 @@ class ExportController:
             app.status_var.set("已有批量任务正在运行，请结束后再导出PicDic索引。")
             return
         try:
-            app._flush_deferred_page_save()
-            app._sync_entry_editor_texts()
-            app.save_pdic(silent=True, sync_editors=False)
+            app.save_pdic(silent=True)
         except Exception as exc:
             app.show_error("导出PicDic索引失败", exc)
             return
@@ -451,28 +465,18 @@ class ExportController:
             return len(records)
 
         def done(completed: int, total: int, stopped: bool, _results, error) -> None:
-            stream = state.get("stream")
-            if stream is not None:
-                try:
-                    stream.flush()
-                    stream.close()
-                except OSError:
-                    pass
-                state["stream"] = None
-            if error is not None or stopped:
-                try:
-                    temp.unlink(missing_ok=True)
-                except OSError:
-                    pass
-                if error is None:
+            try:
+                _finish_text_export(
+                    state.pop("stream", None), temp, target,
+                    publish=error is None and not stopped,
+                )
+                if error is not None:
+                    return
+                if stopped:
                     app.status_var.set(
                         f"PicDic索引导出已停止：完成 {completed}/{total} 页，未生成不完整索引。"
                     )
-                return
-            try:
-                if not temp.exists():
-                    temp.write_text("", encoding="utf-8")
-                os.replace(temp, target)
+                    return
                 page_count = int(state.get("page_count", 0))
                 record_count = int(state.get("record_count", 0))
                 app.status_var.set(
@@ -485,11 +489,8 @@ class ExportController:
                     parent=app,
                 )
             except Exception as exc:
-                try:
-                    temp.unlink(missing_ok=True)
-                except OSError:
-                    pass
-                app.show_error("导出PicDic索引失败", exc)
+                if error is None:
+                    app.show_error("导出PicDic索引失败", exc)
 
         app._start_batch_task(
             "导出PicDic索引", pages, worker, done,
@@ -515,9 +516,7 @@ class ExportController:
             app.status_var.set("已有批量任务正在运行，请结束后再备份PDIC。")
             return
         try:
-            app._flush_deferred_page_save()
-            app._sync_entry_editor_texts()
-            app.save_pdic(silent=True, sync_editors=False)
+            app.save_pdic(silent=True)
         except Exception as exc:
             app.show_error("备份PDIC失败", exc)
             return
@@ -559,28 +558,18 @@ class ExportController:
             return count
 
         def done(completed: int, total: int, stopped: bool, _results, error) -> None:
-            stream = state.get("stream")
-            if stream is not None:
-                try:
-                    stream.flush()
-                    stream.close()
-                except OSError:
-                    pass
-                state["stream"] = None
-            if error is not None or stopped:
-                try:
-                    temp.unlink(missing_ok=True)
-                except OSError:
-                    pass
-                if error is None:
+            try:
+                _finish_text_export(
+                    state.pop("stream", None), temp, target,
+                    publish=error is None and not stopped,
+                )
+                if error is not None:
+                    return
+                if stopped:
                     app.status_var.set(
                         f"PDIC备份已停止：完成 {completed}/{total} 页，未生成不完整备份。"
                     )
-                return
-            try:
-                if not temp.exists():
-                    temp.write_text("", encoding="utf-8")
-                os.replace(temp, target)
+                    return
                 page_count = int(state.get("page_count", 0))
                 record_count = int(state.get("record_count", 0))
                 app.status_var.set(
@@ -592,11 +581,8 @@ class ExportController:
                     parent=app,
                 )
             except Exception as exc:
-                try:
-                    temp.unlink(missing_ok=True)
-                except OSError:
-                    pass
-                app.show_error("备份PDIC失败", exc)
+                if error is None:
+                    app.show_error("备份PDIC失败", exc)
 
         app._start_batch_task(
             "备份PDIC", pages, worker, done, item_label=lambda page: page.name,
@@ -654,9 +640,7 @@ class ExportController:
             return
 
         try:
-            app._flush_deferred_page_save()
-            app._sync_entry_editor_texts()
-            app.save_pdic(silent=True, sync_editors=False)
+            app.save_pdic(silent=True)
         except Exception as exc:
             app.show_error("PDIC 备份 恢复准备失败", exc)
             return

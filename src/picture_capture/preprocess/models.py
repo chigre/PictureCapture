@@ -2,7 +2,7 @@ from __future__ import annotations
 
 """Stable data models and serialization contract for image preprocessing."""
 
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 
 PREPROCESS_FORMAT = "picture-capture-image-preprocess"
 PREPROCESS_FORMAT_VERSION = 24
@@ -233,9 +233,13 @@ class PreprocessAnalysis:
     line_geometry_confidence: float = 0.0
     source_size_bytes: int = 0
     source_mtime_ns: int = 0
+    _source_digest: bytes | None = field(default=None, repr=False, compare=False)
+    _verified_source_stamp: tuple[int, ...] | None = field(default=None, repr=False, compare=False)
 
     def to_dict(self) -> dict:
         payload = asdict(self)
+        payload.pop("_source_digest")
+        payload.pop("_verified_source_stamp")
         payload["format"] = PREPROCESS_FORMAT
         payload["format_version"] = PREPROCESS_FORMAT_VERSION
         payload["crop_box"] = list(self.crop_box)
@@ -269,19 +273,32 @@ class PreprocessAnalysis:
             or int(payload.get("format_version", 0) or 0) != PREPROCESS_FORMAT_VERSION
         ):
             raise ValueError("图片预处理结果版本已过期，需要重新分析")
-        crop = tuple(int(v) for v in payload.get("crop_box", ()))
-        raw = tuple(int(v) for v in payload.get("raw_content_box", ()))
+        from .raster_bounds import validated_crop_box, validated_raster_box, validated_raster_size
+
+        source_size = validated_raster_size(
+            (payload.get("source_width", 1), payload.get("source_height", 1)), "source_size",
+        )
+        geometry_mode = str(payload.get("geometry_mode", "deskew") or "deskew")
+        # UVDoc can return a different raster size. Check those bounds against
+        # the actual corrected image when it is rendered.
+        crop = validated_crop_box(
+            payload.get("crop_box", ()), None if geometry_mode == "uvdoc" else source_size,
+        )
+        raw = validated_raster_box(payload.get("raw_content_box", ()), "raw_content_box")
         text = payload.get("text_box")
         text_box = tuple(int(v) for v in text) if isinstance(text, (list, tuple)) and len(text) == 4 else None
-        if len(crop) != 4 or len(raw) != 4:
-            raise ValueError("图片预处理结果缺少裁剪坐标")
-        return cls(
-            source_width=max(1, int(payload.get("source_width", 1))),
-            source_height=max(1, int(payload.get("source_height", 1))),
+        from .orthogonal_policy import (
+            _orthogonal_finite_number, _orthogonal_grid_dimension, _orthogonal_values,
+        )
+        from .replay import orthogonal_replay_steps, orthogonal_step_records
+
+        analysis = cls(
+            source_width=source_size[0],
+            source_height=source_size[1],
             correction_angle_deg=float(payload.get("correction_angle_deg", 0.0)),
             applied_angle_deg=float(payload.get("applied_angle_deg", 0.0)),
-            crop_box=crop,  # type: ignore[arg-type]
-            raw_content_box=raw,  # type: ignore[arg-type]
+            crop_box=crop,
+            raw_content_box=raw,
             text_box=text_box,  # type: ignore[arg-type]
             source_boxes=max(0, int(payload.get("source_boxes", 0))),
             angle_samples=max(0, int(payload.get("angle_samples", 0))),
@@ -313,7 +330,7 @@ class PreprocessAnalysis:
             requested_geometry_mode=str(
                 payload.get("requested_geometry_mode", "auto") or "auto"
             ),
-            geometry_mode=str(payload.get("geometry_mode", "deskew") or "deskew"),
+            geometry_mode=geometry_mode,
             geometry_strength_px=max(
                 0.0, float(payload.get("geometry_strength_px", 0.0))
             ),
@@ -638,12 +655,12 @@ class PreprocessAnalysis:
                 and len(payload.get("manual_perspective_quad", ())) == 8
                 else None
             ),
-            orthogonal_applied=bool(payload.get("orthogonal_applied", False)),
-            orthogonal_passes=max(0, int(payload.get("orthogonal_passes", 0))),
+            orthogonal_applied=payload.get("orthogonal_applied", False),
+            orthogonal_passes=_orthogonal_grid_dimension(
+                payload.get("orthogonal_passes", 0), "orthogonal_passes",
+            ),
             orthogonal_steps=tuple(
-                dict(item)
-                for item in payload.get("orthogonal_steps", ())
-                if isinstance(item, dict)
+                dict(item) for item in orthogonal_step_records(payload.get("orthogonal_steps", ()))
             ),
             orthogonal_row_count=max(0, int(payload.get("orthogonal_row_count", 0))),
             orthogonal_valid_column_count=max(
@@ -653,45 +670,37 @@ class PreprocessAnalysis:
                 0, int(payload.get("orthogonal_separator_point_count", 0))
             ),
             orthogonal_row_gain=max(
-                0.0, float(payload.get("orthogonal_row_gain", 0.0))
+                0.0, _orthogonal_finite_number(payload.get("orthogonal_row_gain", 0.0), "orthogonal_row_gain")
             ),
-            orthogonal_reference_x=float(
-                payload.get("orthogonal_reference_x", 0.0)
+            orthogonal_reference_x=_orthogonal_finite_number(
+                payload.get("orthogonal_reference_x", 0.0), "orthogonal_reference_x",
             ),
-            orthogonal_y_knots=tuple(
-                float(v) for v in payload.get("orthogonal_y_knots", ())
+            orthogonal_y_knots=_orthogonal_values(
+                payload.get("orthogonal_y_knots", ()), "orthogonal_y_knots",
             ),
-            orthogonal_angle_knots_deg=tuple(
-                float(v) for v in payload.get("orthogonal_angle_knots_deg", ())
+            orthogonal_angle_knots_deg=_orthogonal_values(
+                payload.get("orthogonal_angle_knots_deg", ()), "orthogonal_angle_knots_deg",
             ),
-            orthogonal_x_knots=tuple(
-                float(v) for v in payload.get("orthogonal_x_knots", ())
+            orthogonal_x_knots=_orthogonal_values(
+                payload.get("orthogonal_x_knots", ()), "orthogonal_x_knots",
             ),
-            orthogonal_row_grid_rows=max(
-                0, int(payload.get("orthogonal_row_grid_rows", 0))
+            orthogonal_row_grid_rows=_orthogonal_grid_dimension(
+                payload.get("orthogonal_row_grid_rows", 0), "orthogonal_row_grid_rows",
             ),
-            orthogonal_row_grid_cols=max(
-                0, int(payload.get("orthogonal_row_grid_cols", 0))
+            orthogonal_row_grid_cols=_orthogonal_grid_dimension(
+                payload.get("orthogonal_row_grid_cols", 0), "orthogonal_row_grid_cols",
             ),
-            orthogonal_row_angle_grid_deg=tuple(
-                float(v)
-                for v in payload.get("orthogonal_row_angle_grid_deg", ())
+            orthogonal_row_angle_grid_deg=_orthogonal_values(
+                payload.get("orthogonal_row_angle_grid_deg", ()), "orthogonal_row_angle_grid_deg",
             ),
-            orthogonal_row_displacement_grid_px=tuple(
-                float(v)
-                for v in payload.get(
-                    "orthogonal_row_displacement_grid_px", ()
-                )
+            orthogonal_row_displacement_grid_px=_orthogonal_values(
+                payload.get("orthogonal_row_displacement_grid_px", ()), "orthogonal_row_displacement_grid_px",
             ),
-            orthogonal_separator_y_knots=tuple(
-                float(v)
-                for v in payload.get("orthogonal_separator_y_knots", ())
+            orthogonal_separator_y_knots=_orthogonal_values(
+                payload.get("orthogonal_separator_y_knots", ()), "orthogonal_separator_y_knots",
             ),
-            orthogonal_separator_shift_knots_px=tuple(
-                float(v)
-                for v in payload.get(
-                    "orthogonal_separator_shift_knots_px", ()
-                )
+            orthogonal_separator_shift_knots_px=_orthogonal_values(
+                payload.get("orthogonal_separator_shift_knots_px", ()), "orthogonal_separator_shift_knots_px",
             ),
             orthogonal_horizontal_rule_point_count=max(
                 0,
@@ -985,8 +994,11 @@ class PreprocessAnalysis:
             source_size_bytes=max(0, int(payload.get("source_size_bytes", 0))),
             source_mtime_ns=max(0, int(payload.get("source_mtime_ns", 0))),
         )
+        orthogonal_replay_steps(analysis)
+        analysis.orthogonal_applied = bool(analysis.orthogonal_applied)
+        return analysis
 
 
 # Preserve the historical public class module path for pickle/debug compatibility.
-OutputCanvasInfo.__module__ = "picture_capture.image_preprocessing"
-PreprocessAnalysis.__module__ = "picture_capture.image_preprocessing"
+OutputCanvasInfo.__module__ = "picture_capture.preprocess.pipeline"
+PreprocessAnalysis.__module__ = "picture_capture.preprocess.pipeline"
